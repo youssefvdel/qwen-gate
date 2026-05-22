@@ -71,33 +71,14 @@ async function main() {
       if (!config.provider) config.provider = {};
 
       if (!config.provider['qwen-gate']) {
-        const modelIds = [
-          'qwen3.6-plus', 'qwen3.6-plus-no-thinking',
-          'qwen3.7-max', 'qwen3.7-max-no-thinking',
-          'qwen3.6-max-preview', 'qwen3.6-max-preview-no-thinking',
-          'qwen3.6-27b', 'qwen3.6-27b-no-thinking',
-          'qwen3.7-max-preview', 'qwen3.7-max-preview-no-thinking',
-          'qwen3.7-plus-preview', 'qwen3.7-plus-preview-no-thinking',
-          'qwen3.5-plus', 'qwen3.5-plus-no-thinking',
-          'qwen3.5-omni-plus', 'qwen3.5-omni-plus-no-thinking',
-          'qwen3.6-35b-a3b', 'qwen3.6-35b-a3b-no-thinking',
-          'qwen3.5-flash', 'qwen3.5-flash-no-thinking',
-          'qwen3.5-max-preview', 'qwen3.5-max-preview-no-thinking',
-          'qwen3.6-plus-preview', 'qwen3.6-plus-preview-no-thinking',
-          'qwen3.5-397b-a17b', 'qwen3.5-397b-a17b-no-thinking',
-          'qwen3.5-122b-a10b', 'qwen3.5-122b-a10b-no-thinking',
-          'qwen3.5-omni-flash', 'qwen3.5-omni-flash-no-thinking',
-          'qwen3.5-27b', 'qwen3.5-27b-no-thinking',
-          'qwen3.5-35b-a3b', 'qwen3.5-35b-a3b-no-thinking',
-          'qwen3-max', 'qwen3-max-no-thinking',
-          'qwen3-235b-a22b-2507', 'qwen3-235b-a22b-2507-no-thinking',
-          'qwen3-coder', 'qwen3-coder-no-thinking',
-          'qwen3-vl-235b-a22b', 'qwen3-vl-235b-a22b-no-thinking',
-          'qwen3-omni-flash', 'qwen3-omni-flash-no-thinking',
-          'qwen2.5-max', 'qwen2.5-max-no-thinking',
+        const modelsArr = [
+          { id: 'qwen3.7-max', name: 'Qwen3.7 Max', ctx: 1000000, max: 81920 },
+          { id: 'qwen3.7-max-no-thinking', name: 'Qwen3.7 Max (No Thinking)', ctx: 1000000, max: 81920 },
+          { id: 'qwen3.6-plus', name: 'Qwen3.6 Plus', ctx: 1000000, max: 65536 },
+          { id: 'qwen3.6-plus-no-thinking', name: 'Qwen3.6 Plus (No Thinking)', ctx: 1000000, max: 65536 },
         ];
-        const models: Record<string, null> = {};
-        modelIds.forEach(id => { models[id] = null; });
+        const models: Record<string, any> = {};
+        modelsArr.forEach(m => { models[m.id] = { name: m.name, contextWindow: m.ctx, maxTokens: m.max }; });
         config.provider['qwen-gate'] = {
           name: 'Qwen Gate',
           type: 'openai',

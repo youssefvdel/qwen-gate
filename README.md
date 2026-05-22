@@ -75,10 +75,24 @@ Add this to your `~/.config/opencode/opencode.json`:
     },
     "models": {
       "qwen3.7-max": {
-        "name": "Qwen3.7 Max"
+        "name": "Qwen3.7 Max",
+        "contextWindow": 1000000,
+        "maxTokens": 81920
+      },
+      "qwen3.7-max-no-thinking": {
+        "name": "Qwen3.7 Max (No Thinking)",
+        "contextWindow": 1000000,
+        "maxTokens": 81920
       },
       "qwen3.6-plus": {
-        "name": "Qwen3.6 Plus"
+        "name": "Qwen3.6 Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      "qwen3.6-plus-no-thinking": {
+        "name": "Qwen3.6 Plus (No Thinking)",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
       }
     }
   }
