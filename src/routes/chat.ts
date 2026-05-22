@@ -191,6 +191,7 @@ export async function chatCompletions(c: Context) {
     // concurrent requests to proceed simultaneously on different sessions.
     const session = await sessionPool.acquire();
     let nextParentId: string | null = session.parentId;
+    const sessionHeaders = session.cachedHeaders;
 
     console.log(`[Chat] model=${body.model} session=${session.chatId.substring(0,8)}... stream=${isStream} thinking=${!body.model.includes('no-thinking')}`);
 
@@ -208,7 +209,7 @@ export async function chatCompletions(c: Context) {
       } catch (err: any) {
         retries--;
         if (retries === 0) {
-          sessionPool.release(session.chatId, nextParentId);
+          sessionPool.release(session.chatId, nextParentId, sessionHeaders);
           throw err;
         }
         let useDelay = retryDelay;
@@ -217,7 +218,7 @@ export async function chatCompletions(c: Context) {
         }
         const isRetryable = err instanceof RetryableQwenStreamError || err.message?.includes('in progress') || err.message?.includes('Bad_Request');
         if (!isRetryable) {
-          sessionPool.release(session.chatId, nextParentId);
+          sessionPool.release(session.chatId, nextParentId, sessionHeaders);
           throw err;
         }
         console.warn(`[Chat] Qwen request failed, retrying in ${useDelay}ms... (${retries} left)`);
@@ -332,7 +333,7 @@ export async function chatCompletions(c: Context) {
 
       const upstreamError = parseQwenErrorPayload(buffer);
       if (upstreamError) {
-        sessionPool.release(session.chatId, nextParentId);
+        sessionPool.release(session.chatId, nextParentId, sessionHeaders);
         return c.json({ error: { message: upstreamError.message } }, upstreamError.status as any);
       }
 
@@ -362,7 +363,7 @@ export async function chatCompletions(c: Context) {
       if (toolCallsOut.length) toolCallsOut.forEach((tc, idx) => tc.index = idx);
       if (toolCallsOut.length) message.tool_calls = toolCallsOut;
 
-      sessionPool.release(session.chatId, nextParentId);
+      sessionPool.release(session.chatId, nextParentId, sessionHeaders);
       return c.json({
         id: completionId,
         object: 'chat.completion',
@@ -639,7 +640,7 @@ export async function chatCompletions(c: Context) {
 
       } finally {
         clearInterval(heartbeatInterval);
-        sessionPool.release(session.chatId, nextParentId);
+        sessionPool.release(session.chatId, nextParentId, sessionHeaders);
       }
     });
   } catch (err: any) {

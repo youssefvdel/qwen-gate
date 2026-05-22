@@ -5,23 +5,23 @@
  */
 
 export function robustParseJSON(str: string): any {
-  let sanitized = str.trim();
-  
-  // Remove markdown code blocks if present
-  sanitized = sanitized.replace(/^```json\s*/, '').replace(/```$/, '').trim();
+  const trimmed = str.trim();
 
-  // Try to find the first '{'
+  try {
+    return JSON.parse(trimmed);
+  } catch {}
+
+  let sanitized = trimmed.replace(/^```json\s*/, '').replace(/```$/, '').trim();
+
   const firstBrace = sanitized.indexOf('{');
   if (firstBrace === -1) return null;
 
-  let jsonPart = sanitized.substring(firstBrace);
-  
-  // Try parsing directly first
+  const jsonPart = sanitized.substring(firstBrace);
+
   try {
     return JSON.parse(jsonPart);
-  } catch (e) {
-    // If it fails, let's try to fix common issues
-  }
+  } catch {}
+
 
   // 0. Fix unquoted property names (e.g., arguments instead of "arguments")
   // We apply this to jsonPart and use the result for subsequent fixes

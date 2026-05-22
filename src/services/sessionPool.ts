@@ -5,6 +5,7 @@ interface PoolEntry {
   chatId: string;
   parentId: string | null;
   inUse: boolean;
+  cachedHeaders?: { cookie: string; userAgent: string };
 }
 
 export class SessionPool {
@@ -21,28 +22,31 @@ export class SessionPool {
       const mockId = process.env.TEST_SESSION_ID || 'mock-session';
       return { chatId: mockId, parentId: null, inUse: true };
     }
-    const chatId = await this.createSession();
-    const entry: PoolEntry = { chatId, parentId: null, inUse: true };
+    const [{ cookie, userAgent }, chatId] = await Promise.all([
+      getBasicHeaders(),
+      this.createSession()
+    ]);
+    const entry: PoolEntry = { chatId, parentId: null, inUse: true, cachedHeaders: { cookie, userAgent } };
     console.log(`[SessionPool] Fresh session: ${chatId.substring(0, 8)}...`);
     return entry;
   }
 
-  release(chatId: string, _newParentId: string | null): void {
+  release(chatId: string, _newParentId: string | null, cachedHeaders?: { cookie: string; userAgent: string }): void {
     const waiter = this.waiting.shift();
     if (waiter) {
-      this.createSession().then(id => {
-        waiter({ chatId: id, parentId: _newParentId, inUse: true });
+      Promise.all([getBasicHeaders(), this.createSession()]).then(([{ cookie, userAgent }, id]) => {
+        waiter({ chatId: id, parentId: _newParentId, inUse: true, cachedHeaders: { cookie, userAgent } });
       });
     }
-    this.deleteSession(chatId);
+    this.deleteSession(chatId, cachedHeaders);
   }
 
-  async deleteSession(chatId: string): Promise<void> {
+  async deleteSession(chatId: string, cachedHeaders?: { cookie: string; userAgent: string }): Promise<void> {
     if (process.env.TEST_MOCK_PLAYWRIGHT) return;
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
-      const { cookie, userAgent } = await getBasicHeaders();
+      const { cookie, userAgent } = cachedHeaders || await getBasicHeaders();
       const response = await fetch(`https://chat.qwen.ai/api/v2/chats/${chatId}`, {
         method: 'DELETE',
         signal: controller.signal,

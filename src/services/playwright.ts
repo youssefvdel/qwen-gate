@@ -11,6 +11,12 @@ let cachedQwenHeaders: { headers: Record<string, string>, chatSessionId: string,
 let lastHeadersTime = 0;
 const HEADERS_TTL = 60 * 60 * 1000;
 
+// P0: Cached values for getBasicHeaders() — avoids 2 async CDP calls per invocation
+let cachedUserAgent: string | null = null;
+let cachedCookies: string | null = null;
+let lastCookiesTime = 0;
+const COOKIES_TTL = 30 * 1000; // 30 seconds — cookies change rarely
+
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export class Mutex {
@@ -45,19 +51,29 @@ const uiMutex = new Mutex();
 export async function getCookies(): Promise<string> {
   if (process.env.TEST_MOCK_PLAYWRIGHT) return 'token=mock';
   if (!activePage) return '';
+  // Use cached cookies if still fresh (avoids async CDP call)
+  if (cachedCookies && (Date.now() - lastCookiesTime < COOKIES_TTL)) {
+    return cachedCookies;
+  }
   const cookies = await activePage.context().cookies();
-  return cookies.map(c => `${c.name}=${c.value}`).join('; ');
+  cachedCookies = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+  lastCookiesTime = Date.now();
+  return cachedCookies;
 }
 
 export async function getBasicHeaders(): Promise<{ cookie: string, userAgent: string, bxV: string }> {
   if (process.env.TEST_MOCK_PLAYWRIGHT) return { cookie: 'token=mock', userAgent: 'mock', bxV: '2.5.36' };
   if (!activePage) throw new Error('Playwright not initialized');
   
+  // P0: Use cached userAgent (never changes during browser lifetime)
+  if (!cachedUserAgent) {
+    cachedUserAgent = await activePage.evaluate(() => navigator.userAgent);
+  }
+  
   const cookie = await getCookies();
-  const userAgent = await activePage.evaluate(() => navigator.userAgent);
   const bxV = currentHeaders['bx-v'] || '2.5.36';
   
-  return { cookie, userAgent, bxV };
+  return { cookie, userAgent: cachedUserAgent, bxV };
 }
 
 export async function initPlaywright(headless = true, browserType: BrowserType = 'chromium') {
@@ -264,10 +280,15 @@ async function loginToQwenUI(email: string, password: string): Promise<boolean> 
  * Ensures the session is valid and extracts headers, PoW, and session ID.
  */
 export async function getQwenHeaders(forceNew = false): Promise<{ headers: Record<string, string>, chatSessionId: string, parentMessageId: string | null }> {
-  // Use a lock to ensure only one request uses the UI at a time
-  const release = await uiMutex.acquire();
+  if (!forceNew && cachedQwenHeaders && (Date.now() - lastHeadersTime < HEADERS_TTL)) {
+    return cachedQwenHeaders;
+  }
 
+  const release = await uiMutex.acquire();
   try {
+    if (!forceNew && cachedQwenHeaders && (Date.now() - lastHeadersTime < HEADERS_TTL)) {
+      return cachedQwenHeaders;
+    }
     return await _getQwenHeadersInternal(forceNew);
   } finally {
     release();
@@ -287,10 +308,6 @@ async function _getQwenHeadersInternal(forceNew = false): Promise<{ headers: Rec
       chatSessionId: mockSessionId, 
       parentMessageId: null 
     };
-  }
-
-  if (!forceNew && cachedQwenHeaders && (Date.now() - lastHeadersTime < HEADERS_TTL)) {
-    return cachedQwenHeaders;
   }
 
   if (!activePage) {
@@ -341,10 +358,6 @@ async function _getQwenHeadersInternal(forceNew = false): Promise<{ headers: Rec
         lastHeadersTime = Date.now();
 
         await activePage!.unroute('**/*', routeHandler);
-        import('./qwen.ts').then(m => {
-  m.disableNativeTools().catch(() => {});
-  m.setEnglishInstruction().catch(() => {});
-});
 
         try { await route.continue(); } catch {}
         finish(extracted);

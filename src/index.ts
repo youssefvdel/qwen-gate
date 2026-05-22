@@ -5,7 +5,8 @@ import { bearerAuth } from 'hono/bearer-auth';
 import { chatCompletions } from './routes/chat.ts';
 import { fetchQwenModels } from './services/qwen.ts';
 import * as dotenv from 'dotenv';
-import { initPlaywright, activePage, BrowserType } from './services/playwright.ts';
+import { initPlaywright, activePage, BrowserType, getQwenHeaders } from './services/playwright.ts';
+import { disableNativeTools, setEnglishInstruction } from './services/qwen.ts';
 import { networkInterfaces } from 'os';
 
 dotenv.config();
@@ -76,6 +77,19 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
   initPlaywright(true, browserType).then(async () => {
     console.log(`Playwright initialized (${browserType}).`);
+
+    console.log('[Startup] Pre-warming headers...');
+    try {
+      await getQwenHeaders(true);
+      console.log('[Startup] Headers pre-warmed.');
+    } catch (err: any) {
+      console.warn('[Startup] Header pre-warm failed:', err.message);
+    }
+
+    console.log('[Startup] Configuring account settings...');
+    disableNativeTools().catch(err => console.warn('[Startup] disableNativeTools failed:', err.message));
+    setEnglishInstruction().catch(err => console.warn('[Startup] setEnglishInstruction failed:', err.message));
+
     const port = parseInt(process.env.PORT || '3000', 10) || 3000;
     
     const networkIP = getNetworkAddress();
