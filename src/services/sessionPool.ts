@@ -131,4 +131,5 @@ export class SessionPool {
   }
 }
 
-export const sessionPool = new SessionPool(3);
+const configuredSize = parseInt(process.env.POOL_SIZE || '10', 10) || 10;
+export const sessionPool = new SessionPool(configuredSize);
