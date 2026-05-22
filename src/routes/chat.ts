@@ -1,13 +1,3 @@
-/*
- * File: chat.ts
- * Project: qwenproxy
- * Author: Pedro Farias
- * Created: 2026-05-09
- * 
- * Last Modified: Sat May 09 2026
- * Modified By: Pedro Farias
- */
-
 import { Context } from 'hono';
 import { stream as honoStream } from 'hono/streaming';
 import { v4 as uuidv4 } from 'uuid';
@@ -327,7 +317,7 @@ export async function chatCompletions(c: Context) {
               }
             }
           } catch (e) {
-            // parse error, ignore partial chunk
+            console.debug('[Chat] Non-streaming: parse error on chunk, ignoring partial:', (e as Error)?.message);
           }
         }
       }
@@ -554,7 +544,7 @@ export async function chatCompletions(c: Context) {
               }
             }
           } catch (e) {
-            // parse error, ignore partial chunk
+            console.debug('[Chat] Streaming: parse error on chunk, ignoring partial:', (e as Error)?.message);
           }
         }
       }

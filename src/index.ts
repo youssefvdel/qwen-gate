@@ -1,13 +1,3 @@
-/*
- * File: index.ts
- * Project: qwenproxy
- * Author: Pedro Farias
- * Created: 2026-05-09
- * 
- * Last Modified: Sat May 09 2026
- * Modified By: Pedro Farias
- */
-
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -15,7 +5,7 @@ import { bearerAuth } from 'hono/bearer-auth';
 import { chatCompletions } from './routes/chat.ts';
 import { fetchQwenModels } from './services/qwen.ts';
 import * as dotenv from 'dotenv';
-import { initPlaywright, BrowserType } from './services/playwright.ts';
+import { initPlaywright, activePage, BrowserType } from './services/playwright.ts';
 import { networkInterfaces } from 'os';
 
 dotenv.config();
@@ -47,7 +37,14 @@ app.use('/v1/*', async (c, next) => {
 });
 
 // Basic health check
-app.get('/health', (c) => c.json({ status: 'ok' }));
+app.get('/health', (c) => {
+  const pwOk = activePage !== null;
+  return c.json({
+    status: pwOk ? 'ok' : 'degraded',
+    playwright: pwOk,
+    uptime: process.uptime()
+  }, pwOk ? 200 : 503);
+});
 
 // OpenAI compatible routes
 app.post('/v1/chat/completions', chatCompletions);
@@ -79,7 +76,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
   initPlaywright(true, browserType).then(() => {
     console.log(`Playwright initialized (${browserType}).`);
-    const port = process.env.PORT ? parseInt(process.env.PORT) : 3000;
+    const port = parseInt(process.env.PORT || '3000', 10) || 3000;
     
     const networkIP = getNetworkAddress();
     

@@ -1,10 +1,3 @@
-/*
- * File: qwen.ts
- * Project: qwenproxy
- * Author: Pedro Farias
- * Created: 2026-05-12
- */
-
 import { getQwenHeaders, getBasicHeaders } from './playwright.ts';
 import { v4 as uuidv4 } from 'uuid';
 
