@@ -189,12 +189,32 @@ export async function fetchQwenModels(): Promise<any[]> {
 
   const json = await response.json();
   if (json.data && Array.isArray(json.data)) {
-    const models = json.data.map((m: any) => ({
-      id: m.id,
-      object: 'model',
-      created: m.info?.created_at || Math.floor(Date.now() / 1000),
-      owned_by: m.owned_by || 'qwen'
-    }));
+    const modelSpecs: Record<string, { max_context: number; max_output: number; modalities: string[] }> = {
+      'qwen3.6-plus': { max_context: 1000000, max_output: 65536, modalities: ['text', 'image', 'video'] },
+      'qwen3.7-max': { max_context: 1000000, max_output: 81920, modalities: ['text'] },
+      'qwen3.6-max-preview': { max_context: 1000000, max_output: 65536, modalities: ['text', 'image', 'video'] },
+      'qwen3.6-27b': { max_context: 131072, max_output: 32768, modalities: ['text', 'image', 'video'] },
+      'qwen3.7-max-preview': { max_context: 1000000, max_output: 81920, modalities: ['text'] },
+      'qwen3.7-plus-preview': { max_context: 1000000, max_output: 65536, modalities: ['text', 'image', 'video'] },
+      'qwen3.5-plus': { max_context: 131072, max_output: 32768, modalities: ['text'] },
+      'qwen3.5-omni-plus': { max_context: 131072, max_output: 32768, modalities: ['text', 'image', 'video', 'audio'] },
+      'qwen3.6-35b-a3b': { max_context: 131072, max_output: 32768, modalities: ['text', 'image', 'video'] },
+      'qwen3.5-flash': { max_context: 131072, max_output: 32768, modalities: ['text', 'image'] },
+    };
+
+    const models = json.data.map((m: any) => {
+      const id = m.id.toLowerCase();
+      const specs = modelSpecs[id] || modelSpecs[id.replace(/-no-thinking$/, '')] || { max_context: 1000000, max_output: 65536, modalities: ['text'] };
+      return {
+        id: m.id,
+        object: 'model',
+        created: m.info?.created_at || Math.floor(Date.now() / 1000),
+        owned_by: m.owned_by || 'qwen',
+        context_window: specs.max_context,
+        max_output_tokens: specs.max_output,
+        modalities: specs.modalities,
+      };
+    });
 
     // Add -no-thinking versions for models that support thinking
     const extendedModels = [...models];

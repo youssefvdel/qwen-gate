@@ -1,5 +1,9 @@
+/*
+ * File: engine.ts
+ * Project: qwenproxy
  * Agent State Machine Engine - core orchestration loop
  * Manages phase transitions, LLM calls, tool execution, and event emission.
+ */
 
 import { v4 as uuidv4 } from "uuid";
 import type {

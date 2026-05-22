@@ -1,5 +1,9 @@
+/*
+ * File: openai.ts
+ * Project: qwenproxy
  * Unified OpenAI-compatible type definitions
  * Single source of truth for all message, tool, and response types.
+ */
 
 // ─── JSON Schema ───────────────────────────────────────────────────────────────
 

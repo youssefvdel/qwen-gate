@@ -1,3 +1,9 @@
+/*
+ * File: parser.ts
+ * Project: qwenproxy
+ * Streaming parser for <tool_call> tags - OpenAI Compatible
+ */
+
 import { v4 as uuidv4 } from 'uuid';
 import { robustParseJSON } from '../utils/json.ts';
 import type { ParsedToolCall } from './types.ts';
@@ -88,7 +94,6 @@ export class StreamingToolParser {
           }
         }
       } catch {
-        console.warn('[ToolParser] Failed to parse tool call array, treating as text');
         result.text += this.TOOL_START + content + this.TOOL_END;
       }
     } else if (t.startsWith('{')) {
@@ -97,11 +102,9 @@ export class StreamingToolParser {
         result.toolCalls.push(tc);
         this.emittedToolCallCount++;
       } else {
-        console.warn(`[ToolParser] Failed to parse tool call: ${t.substring(0, 200)}`);
         result.text += this.TOOL_START + content + this.TOOL_END;
       }
     } else {
-      console.warn(`[ToolParser] Unexpected tool call format: starts with "${t.substring(0, 20)}..."`);
       result.text += this.TOOL_START + content + this.TOOL_END;
     }
   }

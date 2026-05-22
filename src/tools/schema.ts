@@ -1,9 +1,14 @@
+/*
+ * File: schema.ts
+ * Project: qwenproxy
  * Strict JSON Schema validator for tool calling
+ */
 
 import type { JsonSchema } from './types.ts';
 
 /**
  * Error thrown when schema validation fails.
+ */
 export class SchemaValidationError extends Error {
   public readonly path: string;
   public readonly value: unknown;
@@ -20,6 +25,7 @@ export class SchemaValidationError extends Error {
  * Validates a value against a JSON Schema with strict type checking.
  * Throws SchemaValidationError on failure.
  * Returns the validated (possibly coerced) value on success.
+ */
 export function validateAgainstSchema(
   value: unknown,
   schema: JsonSchema,

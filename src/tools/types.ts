@@ -1,7 +1,12 @@
+/*
+ * File: types.ts
+ * Project: qwenproxy
  * Tool system types
+ */
 
 /**
  * JSON Schema definition following the OpenAI function calling spec.
+ */
 export interface JsonSchema {
   type: string;
   properties?: Record<string, JsonSchema>;
@@ -33,6 +38,7 @@ export interface JsonSchema {
 
 /**
  * OpenAI-compatible function tool definition.
+ */
 export interface FunctionToolDefinition {
   type: 'function';
   function: {
@@ -45,6 +51,7 @@ export interface FunctionToolDefinition {
 
 /**
  * Internal tool registration entry.
+ */
 export interface ToolRegistration {
   name: string;
   description: string;
@@ -57,6 +64,7 @@ export interface ToolRegistration {
  * Handler function signature for a registered tool.
  * Receives the parsed and validated arguments.
  * Returns the result as a string (or object that will be JSON-stringified).
+ */
 export type ToolHandler<TArgs = any, TResult = any> = (
   args: TArgs,
   context: ToolContext
@@ -64,6 +72,7 @@ export type ToolHandler<TArgs = any, TResult = any> = (
 
 /**
  * Context passed to tool handlers during execution.
+ */
 export interface ToolContext {
   /** The original messages from the request */
   messages: unknown[];
@@ -77,6 +86,7 @@ export interface ToolContext {
 
 /**
  * A parsed tool call from the LLM response.
+ */
 export interface ParsedToolCall {
   id: string;
   name: string;
@@ -85,6 +95,7 @@ export interface ParsedToolCall {
 
 /**
  * Result of executing a single tool call.
+ */
 export interface ToolCallResult {
   toolCallId: string;
   name: string;

@@ -1,5 +1,9 @@
+/*
+ * File: executor.ts
+ * Project: qwenproxy
  * Execution loop for tool calling - agentic loop that handles
  * send -> tool calls -> execute -> re-send until completion
+ */
 
 import { v4 as uuidv4 } from 'uuid';
 import type { ParsedToolCall, ToolCallResult, ToolContext } from './types.ts';
