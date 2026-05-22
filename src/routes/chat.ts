@@ -79,9 +79,19 @@ export async function chatCompletions(c: Context) {
     const body: OpenAIRequest = await c.req.json();
     const isStream = body.stream ?? false;
     
+    const messages = body.messages || [];
+    const textOnlyModels = ['qwen3.7-max', 'qwen3.5-plus', 'qwen3.5-flash', 'qwen3.5-max-preview', 'qwen3.5-27b', 'qwen3.5-122b-a10b', 'qwen3.5-397b-a17b', 'qwen2.5-max'];
+    const hasImages = messages.some(m => 
+      Array.isArray(m.content) && m.content.some((c: any) => c.type === 'image_url')
+    );
+    if (hasImages && textOnlyModels.some(m => body.model.toLowerCase().startsWith(m))) {
+      const original = body.model;
+      body.model = body.model.replace(/^(qwen3?\.?\d*[a-z]*-[a-z]*)/i, 'qwen3.6-plus');
+      console.log(`[Chat] Switched model from ${original} to ${body.model} (request has images)`);
+    }
+
     // Extract the prompt
     let prompt = '';
-    const messages = body.messages || [];
     let systemPrompt = '';
     
     for (let i = 0; i < messages.length; i++) {
