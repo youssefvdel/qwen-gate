@@ -48,10 +48,12 @@ async function main() {
     console.log(`  ⚠️  Could not add hostname (run with sudo/admin): ${err.message}`);
   }
 
-  // 2. Install required package for OpenCode
   try {
-    execSync('npm install -g @ai-sdk/openai-compatible', { stdio: 'pipe' });
-    console.log('  ✅ Installed @ai-sdk/openai-compatible for OpenCode');
+    const opencodeDir = join(homedir(), '.opencode');
+    if (existsSync(opencodeDir)) {
+      execSync(`npm install --prefix ${opencodeDir} @ai-sdk/openai-compatible`, { stdio: 'pipe' });
+      console.log('  ✅ Installed @ai-sdk/openai-compatible for OpenCode');
+    }
   } catch (err) {
     console.log(`  ⚠️  Could not install @ai-sdk/openai-compatible: ${err.message}`);
   }
@@ -70,9 +72,9 @@ async function main() {
 
       if (!config.provider['qwen-gate']) {
         config.provider['qwen-gate'] = {
-          npm: '@ai-sdk/openai-compatible',
           name: 'Qwen Gate',
-          options: { baseURL: `${BASE_URL}/v1` }
+          type: 'openai',
+          apiBase: `${BASE_URL}/v1`
         };
         config.default_provider = config.default_provider || 'qwen-gate';
         writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
@@ -88,6 +90,20 @@ async function main() {
       }
     } catch (err) {
       console.log(`  ⚠️  Could not update OpenCode config: ${err.message}`);
+    }
+  }
+
+  // 4. Add credential to OpenCode auth
+  const authPath = join(homedir(), '.local', 'share', 'opencode', 'auth.json');
+  if (existsSync(authPath)) {
+    try {
+      const auth = JSON.parse(readFileSync(authPath, 'utf-8'));
+      auth['qwen-gate'] = auth['qwen-gate'] || { type: 'api', key: 'none' };
+      delete auth['qwenproxy'];
+      writeFileSync(authPath, JSON.stringify(auth, null, 2) + '\n');
+      console.log('  ✅ Added qwen-gate credential to OpenCode');
+    } catch (err) {
+      console.log(`  ⚠️  Could not update OpenCode auth: ${err.message}`);
     }
   }
 
