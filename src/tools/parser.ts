@@ -94,6 +94,7 @@ export class StreamingToolParser {
           }
         }
       } catch {
+        console.warn('[ToolParser] Failed to parse tool call array, treating as text');
         result.text += this.TOOL_START + content + this.TOOL_END;
       }
     } else if (t.startsWith('{')) {
@@ -102,9 +103,11 @@ export class StreamingToolParser {
         result.toolCalls.push(tc);
         this.emittedToolCallCount++;
       } else {
+        console.warn(`[ToolParser] Failed to parse tool call: ${t.substring(0, 200)}`);
         result.text += this.TOOL_START + content + this.TOOL_END;
       }
     } else {
+      console.warn(`[ToolParser] Unexpected tool call format: starts with "${t.substring(0, 20)}..."`);
       result.text += this.TOOL_START + content + this.TOOL_END;
     }
   }
