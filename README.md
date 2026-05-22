@@ -61,6 +61,32 @@ curl http://localhost:3000/health
 
 Append `-no-thinking` to disable the reasoning phase for faster responses.
 
+## OpenCode Setup
+
+Add this to your `~/.config/opencode/opencode.json`:
+
+```json
+"provider": {
+  "qwen-gate": {
+    "npm": "@ai-sdk/openai-compatible",
+    "name": "Qwen Gate",
+    "options": {
+      "baseURL": "http://qwen-gate/v1"
+    },
+    "models": {
+      "qwen3.7-max": {
+        "name": "Qwen3.7 Max"
+      },
+      "qwen3.6-plus": {
+        "name": "Qwen3.6 Plus"
+      }
+    }
+  }
+}
+```
+
+The setup script (`npm run setup`) does this automatically.
+
 ## Docker
 
 ```bash
