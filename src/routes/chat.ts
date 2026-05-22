@@ -9,6 +9,7 @@ import { robustParseJSON } from '../utils/json.ts';
 import { StreamingToolParser } from '../tools/parser.ts';
 import { RetryableQwenStreamError } from '../services/qwen.ts';
 import { sessionPool } from '../services/sessionPool.ts';
+import modelSpecs from '../models.json' with { type: 'json' };
 
 export interface DeltaResult {
   delta: string;
@@ -80,14 +81,18 @@ export async function chatCompletions(c: Context) {
     const isStream = body.stream ?? false;
     
     const messages = body.messages || [];
-    const textOnlyModels = ['qwen3.7-max', 'qwen3.5-plus', 'qwen3.5-flash', 'qwen3.5-max-preview', 'qwen3.5-27b', 'qwen3.5-122b-a10b', 'qwen3.5-397b-a17b', 'qwen2.5-max'];
     const hasImages = messages.some(m => 
       Array.isArray(m.content) && m.content.some((c: any) => c.type === 'image_url')
     );
-    if (hasImages && textOnlyModels.some(m => body.model.toLowerCase().startsWith(m))) {
-      const original = body.model;
-      body.model = body.model.replace(/^(qwen3?\.?\d*[a-z]*-[a-z]*)/i, 'qwen3.6-plus');
-      console.log(`[Chat] Switched model from ${original} to ${body.model} (request has images)`);
+    if (hasImages) {
+      const modelId = (body.model as string).toLowerCase().replace(/\./g, '-').replace(/-no-thinking$/, '');
+      const specs = (modelSpecs as any)[modelId];
+      const supportsImages = specs?.modalities.includes('image');
+      if (!supportsImages) {
+        const original = body.model;
+        body.model = 'qwen3.6-plus' + (original.includes('-no-thinking') ? '-no-thinking' : '');
+        console.log(`[Chat] Switched model from ${original} to ${body.model} (request has images, ${modelId} is text-only)`);
+      }
     }
 
     // Extract the prompt
