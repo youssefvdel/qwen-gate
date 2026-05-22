@@ -1,6 +1,4 @@
  * 
- * Last Modified: Sat May 09 2026
- * Modified By: Pedro Farias
 
 import type { JsonSchema, FunctionToolDefinition } from '../tools/types.ts';
 export type { JsonSchema, FunctionToolDefinition };

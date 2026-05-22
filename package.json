@@ -15,7 +15,7 @@
     "test": "tsx --test src/**/*.test.ts"
   },
   "keywords": [],
-  "author": "Pedro Farias",
+  "author": "Youssef Adel",
   "license": "ISC",
   "dependencies": {
     "@hono/node-server": "^2.0.3",

@@ -80,7 +80,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     
     const networkIP = getNetworkAddress();
     
-    console.log('\n🚀 QwenProxy started!');
+    console.log('\n🚀 Qwen Gate started!');
     console.log(`- Local:   http://localhost:${port}`);
     if (networkIP) {
       console.log(`- Network: http://${networkIP}:${port}`);
