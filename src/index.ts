@@ -6,7 +6,6 @@ import { chatCompletions } from './routes/chat.ts';
 import { fetchQwenModels } from './services/qwen.ts';
 import * as dotenv from 'dotenv';
 import { initPlaywright, activePage, BrowserType } from './services/playwright.ts';
-import { sessionPool } from './services/sessionPool.ts';
 import { networkInterfaces } from 'os';
 
 dotenv.config();
@@ -40,14 +39,11 @@ app.use('/v1/*', async (c, next) => {
 // Basic health check
 app.get('/health', (c) => {
   const pwOk = activePage !== null;
-  const poolStats = sessionPool.getStats();
-  const poolOk = poolStats.total > 0;
   return c.json({
-    status: (pwOk && poolOk) ? 'ok' : 'degraded',
+    status: pwOk ? 'ok' : 'degraded',
     playwright: pwOk,
-    pool: poolStats,
     uptime: process.uptime()
-  }, (pwOk && poolOk) ? 200 : 503);
+  }, pwOk ? 200 : 503);
 });
 
 // OpenAI compatible routes
@@ -80,13 +76,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
   initPlaywright(true, browserType).then(async () => {
     console.log(`Playwright initialized (${browserType}).`);
-    try {
-      await sessionPool.initialize();
-      console.log(`Session pool ready with ${sessionPool.getStats().total} sessions.`);
-    } catch (err: any) {
-      console.error('Session pool init failed:', err.message);
-      console.warn('Proxy will start but concurrent requests may be limited.');
-    }
     const port = parseInt(process.env.PORT || '3000', 10) || 3000;
     
     const networkIP = getNetworkAddress();

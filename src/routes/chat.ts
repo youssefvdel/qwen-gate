@@ -173,6 +173,8 @@ export async function chatCompletions(c: Context) {
     const session = await sessionPool.acquire();
     let nextParentId: string | null = session.parentId;
 
+    console.log(`[Chat] model=${body.model} session=${session.chatId.substring(0,8)}... stream=${isStream} thinking=${!body.model.includes('no-thinking')}`);
+
     // Retry logic with exponential backoff for "chat is in progress" errors
     let stream: ReadableStream;
     let uiSessionId = session.chatId;

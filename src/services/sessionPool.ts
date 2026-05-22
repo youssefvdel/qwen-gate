@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { getQwenHeaders, getBasicHeaders } from './playwright.ts';
+import { getBasicHeaders } from './playwright.ts';
 
 interface PoolEntry {
   chatId: string;
@@ -8,99 +8,39 @@ interface PoolEntry {
 }
 
 export class SessionPool {
-  private sessions: PoolEntry[] = [];
-  private poolSize: number;
   private waiting: Array<(entry: PoolEntry) => void> = [];
-  private initialized = false;
-
-  constructor(poolSize = 3) {
-    this.poolSize = poolSize;
-  }
 
   async initialize(): Promise<void> {
-    if (this.initialized) return;
     if (process.env.TEST_MOCK_PLAYWRIGHT) {
-      const mockId = process.env.TEST_SESSION_ID || 'mock-session';
-      this.sessions.push({ chatId: mockId, parentId: null, inUse: false });
-      this.initialized = true;
-      console.log(`[SessionPool] Mock mode: using session ${mockId}`);
       return;
-    }
-    console.log(`[SessionPool] Initializing with ${this.poolSize} sessions...`);
-    const errors: Error[] = [];
-    for (let i = 0; i < this.poolSize; i++) {
-      try {
-        const chatId = await this.createSession();
-        this.sessions.push({ chatId, parentId: null, inUse: false });
-        console.log(`[SessionPool] Created session ${i + 1}/${this.poolSize}: ${chatId}`);
-      } catch (err: any) {
-        console.error(`[SessionPool] Failed to create session ${i + 1}: ${err.message}`);
-        errors.push(err);
-      }
-    }
-    if (this.sessions.length === 0) {
-      throw new Error(`[SessionPool] Failed to create any sessions: ${errors.map(e => e.message).join('; ')}`);
-    }
-    this.initialized = true;
-    if (this.sessions.length < this.poolSize) {
-      console.warn(`[SessionPool] Only created ${this.sessions.length}/${this.poolSize} sessions`);
     }
   }
 
   async acquire(): Promise<PoolEntry> {
-    if (!this.initialized && this.sessions.length === 0) {
-      console.warn('[SessionPool] acquire() called but pool not initialized. Auto-initializing...');
-      try {
-        await this.initialize();
-      } catch (err: any) {
-        console.error('[SessionPool] Auto-init failed:', err.message);
-        throw new Error(`Session pool unavailable: ${err.message}`);
-      }
+    if (process.env.TEST_MOCK_PLAYWRIGHT) {
+      const mockId = process.env.TEST_SESSION_ID || 'mock-session';
+      return { chatId: mockId, parentId: null, inUse: true };
     }
-    const available = this.sessions.find(s => !s.inUse);
-    if (available) {
-      available.inUse = true;
-      console.debug(`[SessionPool] Acquired session ${available.chatId.substring(0, 8)}... (${this.getStats().inUse}/${this.getStats().total} in use)`);
-      return available;
-    }
-    console.debug(`[SessionPool] All ${this.sessions.length} sessions busy, waiting...`);
-    return new Promise(resolve => {
-      this.waiting.push(resolve);
-    });
+    const chatId = await this.createSession();
+    const entry: PoolEntry = { chatId, parentId: null, inUse: true };
+    console.log(`[SessionPool] Fresh session: ${chatId.substring(0, 8)}...`);
+    return entry;
   }
 
-  release(chatId: string, newParentId: string | null): void {
-    const entry = this.sessions.find(s => s.chatId === chatId);
-    if (!entry) {
-      console.warn(`[SessionPool] release() called for unknown session: ${chatId.substring(0, 8)}...`);
-      return;
-    }
-    const hadWaiter = this.waiting.length > 0;
-    entry.parentId = newParentId;
-    entry.inUse = false;
+  release(chatId: string, _newParentId: string | null): void {
     const waiter = this.waiting.shift();
     if (waiter) {
-      entry.inUse = true;
-      waiter(entry);
-    }
-    console.debug(`[SessionPool] Released session ${chatId.substring(0, 8)}... ${hadWaiter ? '(handed to waiter)' : ''}`);
-  }
-
-  async replenishOne(): Promise<void> {
-    try {
-      const chatId = await this.createSession();
-      this.sessions.push({ chatId, parentId: null, inUse: false });
-      console.log(`[SessionPool] Replenished session: ${chatId}`);
-    } catch (err: any) {
-      console.error(`[SessionPool] Replenish failed: ${err.message}`);
+      this.createSession().then(id => {
+        waiter({ chatId: id, parentId: _newParentId, inUse: true });
+      });
     }
   }
 
   getStats(): { total: number; available: number; inUse: number; waiting: number } {
     return {
-      total: this.sessions.length,
-      available: this.sessions.filter(s => !s.inUse).length,
-      inUse: this.sessions.filter(s => s.inUse).length,
+      total: 0,
+      available: 0,
+      inUse: 0,
       waiting: this.waiting.length,
     };
   }
@@ -131,5 +71,4 @@ export class SessionPool {
   }
 }
 
-const configuredSize = parseInt(process.env.POOL_SIZE || '10', 10) || 10;
-export const sessionPool = new SessionPool(configuredSize);
+export const sessionPool = new SessionPool();
