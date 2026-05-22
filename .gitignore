@@ -1,0 +1,11 @@
+node_modules/
+dist/
+qwen_profile/
+.env
+.env.local
+*.log
+.DS_Store
+coverage/
+.cache/
+.kilo
+qwen_profile/

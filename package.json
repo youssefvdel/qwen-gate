@@ -1,0 +1,35 @@
+{
+  "name": "qwenproxy",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "npx tsx src/index.ts",
+    "start:firefox": "npx tsx src/index.ts --browser=firefox",
+    "start:chrome": "npx tsx src/index.ts --browser=chrome",
+    "start:edge": "npx tsx src/index.ts --browser=edge",
+    "login": "npx tsx src/login.ts",
+    "login:firefox": "npx tsx src/login.ts --browser=firefox",
+    "login:chrome": "npx tsx src/login.ts --browser=chrome",
+    "login:edge": "npx tsx src/login.ts --browser=edge",
+    "test": "tsx --test src/**/*.test.ts"
+  },
+  "keywords": [],
+  "author": "Pedro Farias",
+  "license": "ISC",
+  "dependencies": {
+    "@hono/node-server": "^2.0.3",
+    "dotenv": "^17.4.2",
+    "hono": "^4.12.21",
+    "playwright": "^1.60.0",
+    "tsx": "^4.22.3",
+    "uuid": "^14.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@types/uuid": "^11.0.0",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
+  },
+  "type": "module"
+}
