@@ -1,22 +1,14 @@
 import { Context } from 'hono';
 import { stream as honoStream } from 'hono/streaming';
 import { v4 as uuidv4 } from 'uuid';
-import { createQwenStream, updateSessionParent } from '../services/qwen.ts';
+import { createQwenStream } from '../services/qwen.ts';
 import { OpenAIRequest, ChoiceDelta, Message } from '../utils/types.ts';
 import { registry } from '../tools/registry.ts';
 import type { FunctionToolDefinition } from '../tools/types.ts';
 import { robustParseJSON } from '../utils/json.ts';
 import { StreamingToolParser } from '../tools/parser.ts';
 import { RetryableQwenStreamError } from '../services/qwen.ts';
-import { Mutex } from '../services/playwright.ts';
-
-// Global mutex that serializes ALL Qwen chat completions requests.
-// The Qwen web backend is stateful: it only allows one generation at a time
-// per session. Concurrent requests to the same session produce:
-//   "Bad_Request: The chat is in progress!"
-// A single global lock is the safest approach because the proxy currently
-// shares one browser session (and therefore one Qwen auth context).
-const qwenChatMutex = new Mutex();
+import { sessionPool } from '../services/sessionPool.ts';
 
 export interface DeltaResult {
   delta: string;
@@ -175,32 +167,27 @@ export async function chatCompletions(c: Context) {
 
     const isThinkingModel = !body.model.includes('no-thinking');
     
-    // A session is new if it doesn't have any assistant messages yet.
-    // This handles cases where the first request has [System, User] messages.
-    const isNewSession = !messages.some(m => m.role === 'assistant');
-
-    // Acquire the global Qwen chat mutex to prevent concurrent generations.
-    // The Qwen backend only allows one active generation per session; without
-    // this lock, parallel requests would race and one would get:
-    //   "Bad_Request: The chat is in progress!"
-    const releaseChatLock = await qwenChatMutex.acquire();
+    // Acquire a session from the pool. Each session supports one active
+    // generation at a time. Using a pool of pre-created sessions allows
+    // concurrent requests to proceed simultaneously on different sessions.
+    const session = await sessionPool.acquire();
+    let nextParentId: string | null = session.parentId;
 
     // Retry logic with exponential backoff for "chat is in progress" errors
     let stream: ReadableStream;
-    let uiSessionId = '';
+    let uiSessionId = session.chatId;
     let retries = 5;
     let retryDelay = 1000;
     while (retries > 0) {
       try {
-        // If it's a new session, force parent_message_id to null
-        const result = await createQwenStream(finalPrompt, isThinkingModel, body.model, isNewSession ? null : undefined);
+        const result = await createQwenStream(finalPrompt, isThinkingModel, body.model, session.chatId, nextParentId);
         stream = result.stream;
         uiSessionId = result.uiSessionId;
-        break; // Success
+        break;
       } catch (err: any) {
         retries--;
         if (retries === 0) {
-          releaseChatLock();
+          sessionPool.release(session.chatId, nextParentId);
           throw err;
         }
         let useDelay = retryDelay;
@@ -209,7 +196,7 @@ export async function chatCompletions(c: Context) {
         }
         const isRetryable = err instanceof RetryableQwenStreamError || err.message?.includes('in progress') || err.message?.includes('Bad_Request');
         if (!isRetryable) {
-          releaseChatLock();
+          sessionPool.release(session.chatId, nextParentId);
           throw err;
         }
         console.warn(`[Chat] Qwen request failed, retrying in ${useDelay}ms... (${retries} left)`);
@@ -255,10 +242,10 @@ export async function chatCompletions(c: Context) {
               if (!targetResponseId) {
                 targetResponseId = chunk['response.created'].response_id;
               }
-              updateSessionParent(uiSessionId, chunk['response.created'].response_id);
+              nextParentId = chunk['response.created'].response_id;
             } else if (chunk.response_id && !targetResponseId) {
               targetResponseId = chunk.response_id;
-              updateSessionParent(uiSessionId, chunk.response_id);
+              nextParentId = chunk.response_id;
             }
 
             if (chunk.usage) {
@@ -324,7 +311,7 @@ export async function chatCompletions(c: Context) {
 
       const upstreamError = parseQwenErrorPayload(buffer);
       if (upstreamError) {
-        releaseChatLock();
+        sessionPool.release(session.chatId, nextParentId);
         return c.json({ error: { message: upstreamError.message } }, upstreamError.status as any);
       }
 
@@ -354,7 +341,7 @@ export async function chatCompletions(c: Context) {
       if (toolCallsOut.length) toolCallsOut.forEach((tc, idx) => tc.index = idx);
       if (toolCallsOut.length) message.tool_calls = toolCallsOut;
 
-      releaseChatLock();
+      sessionPool.release(session.chatId, nextParentId);
       return c.json({
         id: completionId,
         object: 'chat.completion',
@@ -447,15 +434,14 @@ export async function chatCompletions(c: Context) {
           try {
             const chunk = JSON.parse(dataStr);
 
-            // Extract response_id for session tracking and target filtering
             if (chunk['response.created'] && chunk['response.created'].response_id) {
               if (!targetResponseId) {
                 targetResponseId = chunk['response.created'].response_id;
               }
-              updateSessionParent(uiSessionId, chunk['response.created'].response_id);
+              nextParentId = chunk['response.created'].response_id;
             } else if (chunk.response_id && !targetResponseId) {
               targetResponseId = chunk.response_id;
-              updateSessionParent(uiSessionId, chunk.response_id);
+              nextParentId = chunk.response_id;
             }
 
             if (chunk.usage) {
@@ -633,7 +619,7 @@ export async function chatCompletions(c: Context) {
 
       } finally {
         clearInterval(heartbeatInterval);
-        releaseChatLock();
+        sessionPool.release(session.chatId, nextParentId);
       }
     });
   } catch (err: any) {

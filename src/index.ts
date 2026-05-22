@@ -74,8 +74,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     browserType = process.env.BROWSER as BrowserType;
   }
 
-  initPlaywright(true, browserType).then(() => {
+  initPlaywright(true, browserType).then(async () => {
     console.log(`Playwright initialized (${browserType}).`);
+    try {
+      const { sessionPool } = await import('./services/sessionPool.ts');
+      await sessionPool.initialize();
+      console.log(`Session pool ready with ${sessionPool.getStats().total} sessions.`);
+    } catch (err: any) {
+      console.error('Session pool init failed:', err.message);
+      console.warn('Proxy will start but concurrent requests may be limited.');
+    }
     const port = parseInt(process.env.PORT || '3000', 10) || 3000;
     
     const networkIP = getNetworkAddress();

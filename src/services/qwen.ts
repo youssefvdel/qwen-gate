@@ -23,13 +23,7 @@ export class QwenUpstreamError extends Error {
   }
 }
 
-const sessionStates: Record<string, string | null> = (globalThis as any)._sessionStates || {};
-(globalThis as any)._sessionStates = sessionStates;
-
-export function updateSessionParent(sessionId: string, parentId: string | null) {
-  if (sessionId) {
-    sessionStates[sessionId] = parentId;
-  }
+export function updateSessionParent(_sessionId: string, _parentId: string | null) {
 }
 
 export interface QwenMessage {
@@ -190,18 +184,11 @@ export async function createQwenStream(
   prompt: string, 
   enableThinking: boolean, 
   modelId: string,
-  forcedParentId?: string | null
+  chatId?: string,
+  parentId?: string | null
 ): Promise<{ stream: ReadableStream, headers: Record<string, string>, uiSessionId: string }> {
-  const { headers, chatSessionId, parentMessageId } = await getQwenHeaders(forcedParentId === null);
-
-  let actualParentId: string | null = parentMessageId;
-  
-  if (forcedParentId !== undefined) {
-    actualParentId = forcedParentId;
-  } else if (chatSessionId && sessionStates[chatSessionId] !== undefined) {
-    actualParentId = sessionStates[chatSessionId];
-  }
-
+  const { headers } = await getQwenHeaders(false);
+  const actualParentId: string | null = parentId !== undefined ? parentId : null;
   const timestamp = Math.floor(Date.now() / 1000);
   const fid = uuidv4();
   const model = modelId.replace('-no-thinking', '');
@@ -210,7 +197,7 @@ export async function createQwenStream(
     stream: true,
     version: '2.1',
     incremental_output: true,
-    chat_id: chatSessionId || null,
+    chat_id: chatId || null,
     chat_mode: 'normal',
     model: model,
     parent_id: actualParentId,
@@ -247,8 +234,8 @@ export async function createQwenStream(
     timestamp: timestamp + 1
   };
 
-  const url = chatSessionId 
-    ? `https://chat.qwen.ai/api/v2/chat/completions?chat_id=${chatSessionId}`
+  const url = chatId 
+    ? `https://chat.qwen.ai/api/v2/chat/completions?chat_id=${chatId}`
     : 'https://chat.qwen.ai/api/v2/chat/completions';
 
   const response = await fetch(url, {
@@ -259,7 +246,7 @@ export async function createQwenStream(
       'content-type': 'application/json',
       'cookie': headers['cookie'],
       'origin': 'https://chat.qwen.ai',
-      'referer': chatSessionId ? `https://chat.qwen.ai/c/${chatSessionId}` : 'https://chat.qwen.ai/',
+      'referer': chatId ? `https://chat.qwen.ai/c/${chatId}` : 'https://chat.qwen.ai/',
       'sec-fetch-dest': 'empty',
       'sec-fetch-mode': 'cors',
       'sec-fetch-site': 'same-origin',
@@ -324,5 +311,5 @@ export async function createQwenStream(
     throw new Error(`Failed to fetch from Qwen: ${response.status} ${response.statusText} - ${errText}`);
   }
 
-  return { stream: response.body, headers, uiSessionId: chatSessionId };
+  return { stream: response.body, headers, uiSessionId: chatId || '' };
 }
