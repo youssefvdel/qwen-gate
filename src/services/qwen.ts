@@ -76,7 +76,7 @@ export async function setEnglishInstruction(): Promise<void> {
       personalization: {
         name: "",
         description: "",
-        instruction: "Always think and reason in English. Never use Chinese for any thinking or reasoning steps. All output must be in English.",
+        instruction: "Always think and reason in English. Never use Chinese for any thinking or reasoning steps. All output must be in English.\n\nWhen using tools, output ONLY valid JSON inside <tool_call> tags. Never add extra text before or after. The JSON must have EXACTLY these fields: \"name\" (string) and \"arguments\" (object). Example: <tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"file.txt\"}}\n</tool_call>",
         enable_for_new_chat: true
       }
     };
