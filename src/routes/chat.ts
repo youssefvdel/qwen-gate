@@ -11,6 +11,56 @@ import { RetryableQwenStreamError } from '../services/qwen.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import modelSpecs from '../models.json' with { type: 'json' };
 
+// Always-injected tool calling format instruction — model must know the format even when no tools are provided
+// so it can handle tool calls in multi-turn conversations correctly.
+const TOOL_FORMAT_INSTRUCTION = `
+
+# TOOL CALLING FORMAT (MANDATORY)
+To call a tool, output EXACTLY this format with NO markdown, NO code fences:
+<tool_call>
+{"name": "tool_name", "arguments": {"param": "value"}}
+</tool_call>
+
+CORRECT EXAMPLES:
+<tool_call>
+{"name": "read_file", "arguments": {"path": "file1.txt"}}
+</tool_call>
+<tool_call>
+{"name": "edit", "arguments": {"file_path": "/path/to/file", "old_string": "foo", "new_string": "bar"}}
+</tool_call>
+
+----- WRONG - NEVER DO THIS -----
+<tool_call>
+\`\`\`json
+{"name": "read_file", "arguments": {"path": "file.txt"}}
+\`\`\`
+</tool_call>
+
+<tool_call>
+\`\`\`
+{"name": "read_file", "arguments": {"path": "file.txt"}}
+\`\`\`
+</tool_call>
+
+<tool_call>
+{
+  "function": {
+    "name": "read_file",
+    "arguments": "{\\"path\\": \\"file.txt\\"}"
+  }
+}
+</tool_call>
+-----------------------------
+
+CRITICAL RULES - VIOLATION BREAKS THE SYSTEM:
+1. Between <tool_call> and </tool_call> put ONLY raw JSON. NO markdown, NO \`\`\`json, NO \`\`\` fences, NO extra text.
+2. The JSON must have EXACTLY "name" (string) and "arguments" (object). Never use "function" wrapper.
+3. "arguments" must be a JSON object, NOT a string.
+4. The JSON must be VALID — every key double-quoted, no trailing commas, all braces closed.
+5. Call multiple tools by repeating <tool_call> blocks one after another.
+
+`;
+
 export interface DeltaResult {
   delta: string;
   matchedContent: string;
@@ -154,8 +204,11 @@ export async function chatCompletions(c: Context) {
       }
     }
 
-    // Inject tools instructions
+    // Always inject tool calling format instruction — model must always know the format
     const bodyAny = body as any;
+    systemPrompt += TOOL_FORMAT_INSTRUCTION;
+
+    // Inject tools available and tool_choice if provided
     if (bodyAny.tools && Array.isArray(bodyAny.tools) && bodyAny.tools.length > 0) {
       // Better formatting for tools
       const formattedTools = bodyAny.tools.map((t: any) => {

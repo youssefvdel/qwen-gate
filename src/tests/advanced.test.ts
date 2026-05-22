@@ -221,7 +221,7 @@ test('session-parent-tracking: appends messages using response message_id as par
     // Each turn gets a fresh session, so parent_id is always null
     assert.strictEqual(capturedPayloads[0].parent_id, null, 'Turn 1 fresh session');
     assert.strictEqual(capturedPayloads[1].parent_id, null, 'Turn 2 fresh session (no parent tracking across sessions)');
-    assert.strictEqual(capturedPayloads[1].messages[0].content, 'User: Turn 1\n\nAssistant: Response 1\n\nUser: Turn 2\n\n', 'Should send the full OpenAI message history');
+    assert.strictEqual(capturedPayloads[1].messages[0].content.endsWith('User: Turn 1\n\nAssistant: Response 1\n\nUser: Turn 2\n\n'), true, 'Should send the full OpenAI message history with prepended tool format');
   } finally {
     restore();
   }

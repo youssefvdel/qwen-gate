@@ -6,7 +6,6 @@ import { chatCompletions } from './routes/chat.ts';
 import { fetchQwenModels } from './services/qwen.ts';
 import * as dotenv from 'dotenv';
 import { initPlaywright, activePage, BrowserType, getQwenHeaders } from './services/playwright.ts';
-import { disableNativeTools, setEnglishInstruction } from './services/qwen.ts';
 import { networkInterfaces } from 'os';
 
 dotenv.config();
@@ -85,10 +84,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     } catch (err: any) {
       console.warn('[Startup] Header pre-warm failed:', err.message);
     }
-
-    console.log('[Startup] Configuring account settings...');
-    disableNativeTools().catch(err => console.warn('[Startup] disableNativeTools failed:', err.message));
-    setEnglishInstruction().catch(err => console.warn('[Startup] setEnglishInstruction failed:', err.message));
 
     const port = parseInt(process.env.PORT || '3000', 10) || 3000;
     
