@@ -80,8 +80,14 @@ export class StreamingToolParser {
   }
 
   private processToolContent(content: string, result: ParserResult): void {
-    const t = content.trim();
+    let t = content.trim();
     if (!t) return;
+
+    // Strip markdown code blocks if the model wraps JSON in ```json ... ```
+    // This happens when the model doesn't follow instructions perfectly.
+    if (t.startsWith('`') || t.startsWith('```')) {
+      t = t.replace(/^```(?:json)?\s*/gm, '').replace(/```\s*$/gm, '').trim();
+    }
 
     if (t.startsWith('[')) {
       try {
