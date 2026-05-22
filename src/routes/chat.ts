@@ -448,7 +448,6 @@ export async function chatCompletions(c: Context) {
           
           const dataStr = trimmed.slice(6);
           if (dataStr === '[DONE]') {
-            await streamWriter.write('data: [DONE]\n\n');
             break;
           }
 
