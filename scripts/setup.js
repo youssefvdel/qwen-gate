@@ -48,7 +48,15 @@ async function main() {
     console.log(`  ⚠️  Could not add hostname (run with sudo/admin): ${err.message}`);
   }
 
-  // 2. Register with OpenCode
+  // 2. Install required package for OpenCode
+  try {
+    execSync('npm install -g @ai-sdk/openai-compatible', { stdio: 'pipe' });
+    console.log('  ✅ Installed @ai-sdk/openai-compatible for OpenCode');
+  } catch (err) {
+    console.log(`  ⚠️  Could not install @ai-sdk/openai-compatible: ${err.message}`);
+  }
+
+  // 3. Register with OpenCode
   const opencodeConfigPath = join(homedir(), '.config', 'opencode', 'opencode.json');
   const opencodeAltPath = join(homedir(), '.config', 'opencode.json');
 
