@@ -21,6 +21,12 @@ export class StreamingToolParser {
   private emittedToolCallCount = 0;
   private chunksSinceTagChange = 0;
 
+  // Recent flushed text buffer — enables cross-chunk orphaned tool call detection.
+  // When JSON arrives in one chunk and </tool_call> in the next, the orphan
+  // extraction searches this buffer for JSON to pair with the closer.
+  private recentText = '';
+  private readonly MAX_RECENT = 4000;
+
   // Max buffer size (100KB) to prevent OOM on long streams without tool calls
   private readonly MAX_BUFFER_SIZE = 100_000;
 
@@ -64,10 +70,16 @@ export class StreamingToolParser {
         } else {
           // Check for partial opening tag before flushing
           const partialLength = this.getPartialTagLength();
-          const flushIndex = this.buffer.length - partialLength;
-          if (flushIndex > 0) {
-            result.text += this.buffer.substring(0, flushIndex);
-            this.buffer = this.buffer.substring(flushIndex);
+          const flushLen = this.buffer.length - partialLength;
+          if (flushLen > 2000) {
+            // Keep trailing ~2000 chars of text so orphaned </tool_call> detection
+            // in the next feed() can find JSON that arrived in a previous chunk.
+            result.text += this.buffer.substring(0, flushLen - 2000);
+            this.buffer = this.buffer.substring(flushLen - 2000);
+          } else if (flushLen > 0) {
+            // Small buffer — flush everything except the partial tag
+            result.text += this.buffer.substring(0, flushLen);
+            this.buffer = this.buffer.substring(flushLen);
           }
           break;
         }

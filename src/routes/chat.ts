@@ -145,7 +145,12 @@ function parseQwenErrorPayload(raw: string): { message: string; status: number }
 export async function chatCompletions(c: Context) {
   try {
     const body: OpenAIRequest = await c.req.json();
-    const isStream = body.stream ?? false;
+    // Force non-streaming when tools are present — streaming breaks tool call
+    // parsing when JSON and </tool_call> arrive in separate SSE chunks.
+    // Non-streaming collects the full response, parses once, and returns all
+    // tool calls together (client still sees them call by call).
+    const hasTools = !!(body as any).tools?.length;
+    const isStream = hasTools ? false : (body.stream ?? false);
     
     const messages = body.messages || [];
 
