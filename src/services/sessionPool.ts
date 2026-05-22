@@ -40,9 +40,12 @@ export class SessionPool {
   async deleteSession(chatId: string): Promise<void> {
     if (process.env.TEST_MOCK_PLAYWRIGHT) return;
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
       const { cookie, userAgent } = await getBasicHeaders();
       const response = await fetch(`https://chat.qwen.ai/api/v2/chats/${chatId}`, {
         method: 'DELETE',
+        signal: controller.signal,
         headers: {
           'accept': 'application/json, text/plain, */*',
           'content-type': 'application/json',
@@ -53,11 +56,16 @@ export class SessionPool {
           'source': 'web',
         },
       });
+      clearTimeout(timeout);
       if (response.ok) {
         console.log(`[SessionPool] Deleted session ${chatId.substring(0, 8)}...`);
       }
     } catch (err: any) {
-      console.debug(`[SessionPool] Failed to delete session ${chatId.substring(0, 8)}...: ${err.message}`);
+      if (err.name === 'AbortError') {
+        console.warn(`[SessionPool] Delete timeout for ${chatId.substring(0, 8)}...`);
+      } else {
+        console.warn(`[SessionPool] Delete failed for ${chatId.substring(0, 8)}...: ${err.message}`);
+      }
     }
   }
 
