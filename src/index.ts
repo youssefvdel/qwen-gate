@@ -81,12 +81,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const networkIP = getNetworkAddress();
     
     console.log('\n🚀 Qwen Gate started!');
-    console.log(`- Local:   http://localhost:${port}`);
-    if (port === 80) {
-      console.log(`- Alias:   http://qwen-gate`);
-    }
+    console.log(`- Local:   http://localhost${port === 80 ? '' : ':' + port}`);
+    console.log(`- Alias:   http://qwen-gate`);
     if (networkIP) {
-      console.log(`- Network: http://${networkIP}:${port}`);
+      console.log(`- Network: http://${networkIP}${port === 80 ? '' : ':' + port}`);
     }
 
     console.log('\nAvailable Routes:');

@@ -17,7 +17,7 @@ if (existsSync(envPath)) {
 
 const HOSTNAME = 'qwen-gate';
 const PORT = process.env.PORT || '3000';
-const BASE_URL = `http://${HOSTNAME}:${PORT}`;
+const BASE_URL = PORT === '80' ? `http://${HOSTNAME}` : `http://${HOSTNAME}:${PORT}`;
 
 async function main() {
   console.log(`\nSetting up Qwen Gate...\n`);
