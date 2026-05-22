@@ -6,6 +6,7 @@ import { chatCompletions } from './routes/chat.ts';
 import { fetchQwenModels } from './services/qwen.ts';
 import * as dotenv from 'dotenv';
 import { initPlaywright, activePage, BrowserType } from './services/playwright.ts';
+import { sessionPool } from './services/sessionPool.ts';
 import { networkInterfaces } from 'os';
 
 dotenv.config();
@@ -39,11 +40,14 @@ app.use('/v1/*', async (c, next) => {
 // Basic health check
 app.get('/health', (c) => {
   const pwOk = activePage !== null;
+  const poolStats = sessionPool.getStats();
+  const poolOk = poolStats.total > 0;
   return c.json({
-    status: pwOk ? 'ok' : 'degraded',
+    status: (pwOk && poolOk) ? 'ok' : 'degraded',
     playwright: pwOk,
+    pool: poolStats,
     uptime: process.uptime()
-  }, pwOk ? 200 : 503);
+  }, (pwOk && poolOk) ? 200 : 503);
 });
 
 // OpenAI compatible routes
@@ -77,7 +81,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   initPlaywright(true, browserType).then(async () => {
     console.log(`Playwright initialized (${browserType}).`);
     try {
-      const { sessionPool } = await import('./services/sessionPool.ts');
       await sessionPool.initialize();
       console.log(`Session pool ready with ${sessionPool.getStats().total} sessions.`);
     } catch (err: any) {

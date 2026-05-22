@@ -23,9 +23,6 @@ export class QwenUpstreamError extends Error {
   }
 }
 
-export function updateSessionParent(_sessionId: string, _parentId: string | null) {
-}
-
 export interface QwenMessage {
   fid: string;
   parentId: string | null;

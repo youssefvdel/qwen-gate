@@ -60,8 +60,10 @@ export class SessionPool {
     const available = this.sessions.find(s => !s.inUse);
     if (available) {
       available.inUse = true;
+      console.debug(`[SessionPool] Acquired session ${available.chatId.substring(0, 8)}... (${this.getStats().inUse}/${this.getStats().total} in use)`);
       return available;
     }
+    console.debug(`[SessionPool] All ${this.sessions.length} sessions busy, waiting...`);
     return new Promise(resolve => {
       this.waiting.push(resolve);
     });
@@ -69,7 +71,11 @@ export class SessionPool {
 
   release(chatId: string, newParentId: string | null): void {
     const entry = this.sessions.find(s => s.chatId === chatId);
-    if (!entry) return;
+    if (!entry) {
+      console.warn(`[SessionPool] release() called for unknown session: ${chatId.substring(0, 8)}...`);
+      return;
+    }
+    const hadWaiter = this.waiting.length > 0;
     entry.parentId = newParentId;
     entry.inUse = false;
     const waiter = this.waiting.shift();
@@ -77,6 +83,7 @@ export class SessionPool {
       entry.inUse = true;
       waiter(entry);
     }
+    console.debug(`[SessionPool] Released session ${chatId.substring(0, 8)}... ${hadWaiter ? '(handed to waiter)' : ''}`);
   }
 
   async replenishOne(): Promise<void> {
