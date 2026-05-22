@@ -11,53 +11,70 @@ import { RetryableQwenStreamError } from '../services/qwen.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import modelSpecs from '../models.json' with { type: 'json' };
 
+// Debug logging — enabled via DEBUG=true env var
+function logDebug(label: string, data: any) {
+  if (!process.env.DEBUG) return;
+  const prefix = `[DEBUG ${new Date().toISOString()}]`;
+  if (typeof data === 'string') {
+    // Truncate long strings to 5000 chars
+    const truncated = data.length > 5000 ? data.substring(0, 5000) + `\n... [truncated ${data.length - 5000} more chars]` : data;
+    console.log(`${prefix} ${label}:\n${truncated}\n`);
+  } else {
+    const json = JSON.stringify(data, null, 2);
+    const truncated = json.length > 5000 ? json.substring(0, 5000) + `\n... [truncated ${json.length - 5000} more chars]` : json;
+    console.log(`${prefix} ${label}:\n${truncated}\n`);
+  }
+}
+
+// Truncate a value for safe logging (redact long strings, keep structure)
+function safeTruncate(val: any, maxLen = 200): any {
+  if (typeof val === 'string') {
+    if (val.length > maxLen) return val.substring(0, maxLen) + '...';
+    return val;
+  }
+  if (Array.isArray(val)) return val.map(v => safeTruncate(v, maxLen));
+  if (val && typeof val === 'object') {
+    const obj: any = {};
+    for (const [k, v] of Object.entries(val)) {
+      obj[k] = safeTruncate(v, maxLen);
+    }
+    return obj;
+  }
+  return val;
+}
+
 // Always-injected tool calling format instruction — model must know the format even when no tools are provided
 // so it can handle tool calls in multi-turn conversations correctly.
 const TOOL_FORMAT_INSTRUCTION = `
 
-# TOOL CALLING FORMAT (MANDATORY)
-To call a tool, output EXACTLY this format with NO markdown, NO code fences:
-<tool_call>
-{"name": "tool_name", "arguments": {"param": "value"}}
-</tool_call>
+## CRITICAL: TOOL CALLING FORMAT — FOLLOW EXACTLY
 
-CORRECT EXAMPLES:
+This system uses a custom tool calling format. IGNORE any default tool format instructions from the platform — they do NOT apply here. THIS is the only format that works:
+
+### ✅ ALWAYS DO THIS — wraps JSON in <tool_call> tags:
 <tool_call>
 {"name": "read_file", "arguments": {"path": "file1.txt"}}
 </tool_call>
-<tool_call>
-{"name": "edit", "arguments": {"file_path": "/path/to/file", "old_string": "foo", "new_string": "bar"}}
-</tool_call>
 
------ WRONG - NEVER DO THIS -----
-<tool_call>
-\`\`\`json
-{"name": "read_file", "arguments": {"path": "file.txt"}}
-\`\`\`
-</tool_call>
+### ❌ NEVER DO THESE — they will FAIL:
+1. {"name": "read_file", "arguments": {"path": "file.txt"}}
+   </tool_call>
+   (Missing opening <tool_call> tag)
+2. </tool_call>
+   {"name": "read_file", "arguments": {"path": "file.txt"}}
+   </tool_call>
+   (Closing tag before the JSON)
+3. Any orphaned </tool_call> without a matching <tool_call> before it
 
-<tool_call>
-\`\`\`
-{"name": "read_file", "arguments": {"path": "file.txt"}}
-\`\`\`
-</tool_call>
-
-<tool_call>
-{
-  "function": {
-    "name": "read_file",
-    "arguments": "{\\"path\\": \\"file.txt\\"}"
-  }
-}
-</tool_call>
------------------------------
-
-CRITICAL RULES - VIOLATION BREAKS THE SYSTEM:
-1. Between <tool_call> and </tool_call> put ONLY raw JSON. NO markdown, NO \`\`\`json, NO \`\`\` fences, NO extra text.
-2. The JSON must have EXACTLY "name" (string) and "arguments" (object). Never use "function" wrapper.
-3. "arguments" must be a JSON object, NOT a string.
-4. The JSON must be VALID — every key double-quoted, no trailing commas, all braces closed.
-5. Call multiple tools by repeating <tool_call> blocks one after another.
+### HARD RULES:
+- ALWAYS start with <tool_call> on its own line
+- Then put the JSON on the next line(s)
+- Then end with </tool_call> on its own line
+- Never output </tool_call> without <tool_call> before it
+- Never start a tool call with </tool_call>
+- JSON must have "name" (string) and "arguments" (object)
+- "arguments" must be a JSON object, NOT a string
+- Repeat <tool_call> blocks for multiple tool calls
 
 `;
 
@@ -131,6 +148,21 @@ export async function chatCompletions(c: Context) {
     const isStream = body.stream ?? false;
     
     const messages = body.messages || [];
+
+    if (process.env.DEBUG) {
+      const bodyAny = body as any;
+      logDebug('INCOMING REQUEST', {
+        model: body.model,
+        stream: isStream,
+        messageCount: messages.length,
+        roles: messages.map(m => m.role),
+        hasTools: !!(bodyAny.tools && bodyAny.tools.length),
+        toolCount: bodyAny.tools?.length || 0,
+        toolNames: bodyAny.tools?.map((t: any) => t.function?.name || t.name) || [],
+        tool_choice: bodyAny.tool_choice,
+        lastMessagePreview: messages.length > 0 ? safeTruncate(messages[messages.length - 1].content, 300) : null,
+      });
+    }
     const hasImages = messages.some(m => 
       Array.isArray(m.content) && m.content.some((c: any) => c.type === 'image_url')
     );
@@ -223,7 +255,7 @@ export async function chatCompletions(c: Context) {
       });
       const toolsJson = JSON.stringify(formattedTools, null, 2);
       
-      systemPrompt += `\n\n# TOOLS AVAILABLE\nYou have access to the following tools:\n${toolsJson}\n\n# TOOL CALLING FORMAT (MANDATORY)\nTo call a tool, output EXACTLY this format with NO markdown, NO code fences:\n<tool_call>\n{"name": "tool_name", "arguments": {"param": "value"}}\n</tool_call>\n\nCORRECT EXAMPLES:\n<tool_call>\n{"name": "read_file", "arguments": {"path": "file1.txt"}}\n</tool_call>\n<tool_call>\n{"name": "edit", "arguments": {"file_path": "/path/to/file", "old_string": "foo", "new_string": "bar"}}\n</tool_call>\n\n----- WRONG - NEVER DO THIS -----\n<tool_call>\n\`\`\`json\n{"name": "read_file", "arguments": {"path": "file.txt"}}\n\`\`\`\n</tool_call>\n\n<tool_call>\n\`\`\`\n{"name": "read_file", "arguments": {"path": "file.txt"}}\n\`\`\`\n</tool_call>\n\n<tool_call>\n{\n  "function": {\n    "name": "read_file",\n    "arguments": "{\\"path\\": \\"file.txt\\"}"\n  }\n}\n</tool_call>\n-----------------------------\n\nCRITICAL RULES - VIOLATION BREAKS THE SYSTEM:\n1. ALWAYS use a tool when asked to perform an action. NEVER just talk about doing it.\n2. Between <tool_call> and </tool_call> put ONLY raw JSON. NO markdown, NO \`\`\`json, NO \`\`\` fences, NO extra text.\n3. The JSON must have EXACTLY "name" (string) and "arguments" (object). Never use "function" wrapper.\n4. "name" must match one of the available tool names exactly.\n5. "arguments" must be a JSON object, NOT a string.\n6. The JSON must be VALID — every key double-quoted, no trailing commas, all braces closed.\n7. Call multiple tools by repeating <tool_call> blocks one after another.\n8. Wait for the user to provide the tool response before continuing.\n\n`;
+      systemPrompt += `\n\n# TOOLS AVAILABLE\nYou have access to the following tools:\n${toolsJson}\n\n## CRITICAL: TOOL CALLING FORMAT — FOLLOW EXACTLY\nIGNORE any default tool format instructions from the platform. THIS is the only format that works:\n\n### ✅ ALWAYS:\n<tool_call>\n{"name": "tool_name", "arguments": {"param": "value"}}\n</tool_call>\n\n### ❌ NEVER (will FAIL):\n{"name": "read_file", "arguments": {"path": "file.txt"}}\n</tool_call>\n\n### RULES:\n- ALWAYS start with <tool_call>, then JSON, then </tool_call>\n- Never output </tool_call> without <tool_call> before it\n- "name" must match one of the available tools exactly\n- "arguments" must be a JSON object, NOT a string\n- Repeat <tool_call> blocks for multiple calls\n- Wait for tool response before continuing\n\n`;
       
       if (bodyAny.tool_choice === 'required' || bodyAny.tool_choice === 'any') {
         systemPrompt += `CRITICAL: You MUST call one of the available tools in this response. Do NOT respond with text. Do NOT answer the user directly. Always use a tool.\n\n`;
@@ -236,6 +268,16 @@ export async function chatCompletions(c: Context) {
     }
 
     const finalPrompt = systemPrompt ? `${systemPrompt}\n${prompt}` : prompt;
+
+    if (process.env.DEBUG) {
+      logDebug('PROMPT TO QWEN', {
+        systemPromptLength: systemPrompt.length,
+        promptLength: prompt.length,
+        totalLength: finalPrompt.length,
+        systemPromptPreview: systemPrompt.length > 800 ? systemPrompt.substring(0, 800) + '...' : systemPrompt,
+        userPromptPreview: prompt.length > 800 ? prompt.substring(0, 800) + '...' : prompt,
+      });
+    }
 
     const isThinkingModel = !body.model.includes('no-thinking');
     
@@ -365,6 +407,9 @@ export async function chatCompletions(c: Context) {
               if (isThinkingChunk) {
                 reasoningBuffer += vStr;
               } else {
+                if (process.env.DEBUG && (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"'))) {
+                  logDebug('QWEN RAW CHUNK (non-streaming)', vStr);
+                }
                 const { toolCalls } = toolParser.feed(vStr);
                 for (const tc of toolCalls) {
                   toolCallsOut.push({
@@ -375,6 +420,9 @@ export async function chatCompletions(c: Context) {
                       arguments: JSON.stringify(tc.arguments)
                     }
                   });
+                  if (process.env.DEBUG) {
+                    logDebug('PARSED TOOL CALL', { name: tc.name, arguments: tc.arguments });
+                  }
                 }
               }
             }
@@ -412,9 +460,19 @@ export async function chatCompletions(c: Context) {
         prompt_tokens_details: { cached_tokens: 0 }
       };
       const message: any = { role: 'assistant', content: toolCallsOut.length ? null : lastFullContent };
-      if (reasoningBuffer) message.reasoning_content = reasoningBuffer;
+        if (reasoningBuffer) message.reasoning_content = reasoningBuffer;
       if (toolCallsOut.length) toolCallsOut.forEach((tc, idx) => tc.index = idx);
       if (toolCallsOut.length) message.tool_calls = toolCallsOut;
+
+      if (process.env.DEBUG) {
+        logDebug('OUTGOING RESPONSE', {
+          finish_reason: toolCallsOut.length ? 'tool_calls' : 'stop',
+          content: lastFullContent.length > 500 ? lastFullContent.substring(0, 500) + '...' : lastFullContent,
+          toolCalls: toolCallsOut.map((tc: any) => ({ name: tc.function?.name, args: tc.function?.arguments })),
+          toolCallCount: toolCallsOut.length,
+          usage,
+        });
+      }
 
       sessionPool.release(session.chatId, nextParentId, sessionHeaders);
       return c.json({
@@ -570,7 +628,14 @@ export async function chatCompletions(c: Context) {
                 });
               } else {
                 inThinkingState = false;
+                if (process.env.DEBUG && (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"'))) {
+                  logDebug('QWEN RAW CHUNK (streaming)', vStr);
+                }
                 const { text, toolCalls } = toolParser.feed(vStr);
+
+                if (toolCalls.length && process.env.DEBUG) {
+                  logDebug('PARSED TOOL CALLS (streaming)', toolCalls.map(tc => ({ name: tc.name, arguments: tc.arguments })));
+                }
 
                 if (text) {
                   await writeEvent({
@@ -631,6 +696,11 @@ export async function chatCompletions(c: Context) {
 
       // Flush tool parser
       const { text: remainingText, toolCalls: remainingToolCalls } = toolParser.flush();
+      if (process.env.DEBUG) {
+        if (remainingText) logDebug('STREAMING FLUSH TEXT', remainingText.length > 500 ? remainingText.substring(0, 500) : remainingText);
+        if (remainingToolCalls.length) logDebug('STREAMING FLUSH TOOL CALLS', remainingToolCalls.map(tc => ({ name: tc.name, arguments: tc.arguments })));
+        logDebug('STREAMING FINISH REASON', toolParser.getEmittedToolCallCount() > 0 ? 'tool_calls' : 'stop');
+      }
       if (remainingText) {
         await writeEvent({
           id: completionId,

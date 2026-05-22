@@ -62,9 +62,15 @@ export function parseToolCallsFromContent(content: string): {
       break;
     }
 
-    const jsonStr = remaining
+    let jsonStr = remaining
       .substring(startIdx + TOOL_START_TAG.length, endIdx)
       .trim();
+
+    // Strip markdown code fences that models sometimes add
+    const fenceMatch = jsonStr.match(/\x60\x60\x60(?:json|JSON)?\s*\n?([\s\S]*?)\n?\s*\x60\x60\x60/);
+    if (fenceMatch) {
+      jsonStr = fenceMatch[1].trim();
+    }
 
     try {
       const parsed = robustParseJSON(jsonStr);

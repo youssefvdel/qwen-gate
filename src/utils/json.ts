@@ -11,7 +11,14 @@ export function robustParseJSON(str: string): any {
     return JSON.parse(trimmed);
   } catch {}
 
-  let sanitized = trimmed.replace(/^```json\s*/, '').replace(/```$/, '').trim();
+  // Strip markdown code fences in all variants
+  let sanitized = trimmed;
+  const fenceMatch = sanitized.match(/\x60\x60\x60(?:json|JSON)?\s*\n?([\s\S]*?)\n?\s*\x60\x60\x60/);
+  if (fenceMatch) {
+    sanitized = fenceMatch[1].trim();
+  } else {
+    sanitized = sanitized.replace(/^\x60\x60\x60(?:json|JSON)?\s*/i, '').replace(/\x60\x60\x60\s*$/, '').trim();
+  }
 
   const firstBrace = sanitized.indexOf('{');
   if (firstBrace === -1) return null;
