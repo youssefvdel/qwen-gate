@@ -71,14 +71,14 @@ async function main() {
       if (!config.provider) config.provider = {};
 
       if (!config.provider['qwen-gate']) {
-        const modelsArr = [
-          { id: 'qwen3.7-max', name: 'Qwen3.7 Max', ctx: 1000000, max: 81920 },
-          { id: 'qwen3.7-max-no-thinking', name: 'Qwen3.7 Max (No Thinking)', ctx: 1000000, max: 81920 },
-          { id: 'qwen3.6-plus', name: 'Qwen3.6 Plus', ctx: 1000000, max: 65536 },
-          { id: 'qwen3.6-plus-no-thinking', name: 'Qwen3.6 Plus (No Thinking)', ctx: 1000000, max: 65536 },
+        const modelDefs = [
+          { id: 'qwen3.7-max', name: 'Qwen3.7 Max', ctx: 1000000, out: 81920 },
+          { id: 'qwen3.7-max-no-thinking', name: 'Qwen3.7 Max (No Thinking)', ctx: 1000000, out: 81920 },
+          { id: 'qwen3.6-plus', name: 'Qwen3.6 Plus', ctx: 1000000, out: 65536 },
+          { id: 'qwen3.6-plus-no-thinking', name: 'Qwen3.6 Plus (No Thinking)', ctx: 1000000, out: 65536 },
         ];
         const models: Record<string, any> = {};
-        modelsArr.forEach(m => { models[m.id] = { name: m.name, contextWindow: m.ctx, maxTokens: m.max }; });
+        modelDefs.forEach(m => { models[m.id] = { name: m.name, limit: { context: m.ctx, output: m.out } }; });
         config.provider['qwen-gate'] = {
           name: 'Qwen Gate',
           type: 'openai',
