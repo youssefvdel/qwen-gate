@@ -71,14 +71,11 @@ export class StreamingToolParser {
           // Check for partial opening tag before flushing
           const partialLength = this.getPartialTagLength();
           const flushLen = this.buffer.length - partialLength;
-          if (flushLen > 2000) {
-            // Keep trailing ~2000 chars of text so orphaned </tool_call> detection
-            // in the next feed() can find JSON that arrived in a previous chunk.
-            result.text += this.buffer.substring(0, flushLen - 2000);
-            this.buffer = this.buffer.substring(flushLen - 2000);
-          } else if (flushLen > 0) {
-            // Small buffer — flush everything except the partial tag
-            result.text += this.buffer.substring(0, flushLen);
+          if (flushLen > 0) {
+            const flushed = this.buffer.substring(0, flushLen);
+            result.text += flushed;
+            // Save flushed text for cross-chunk orphan detection
+            this.recentText = (this.recentText + flushed).slice(-this.MAX_RECENT);
             this.buffer = this.buffer.substring(flushLen);
           }
           break;
@@ -132,6 +129,7 @@ export class StreamingToolParser {
     this.buffer = '';
     this.insideTool = false;
     this.chunksSinceTagChange = 0;
+    this.recentText = '';
     return result;
   }
 
@@ -263,9 +261,28 @@ export class StreamingToolParser {
       }
 
       // Find a JSON object/array start before the </tool_call>.
-      // If none found, skip this closer and keep scanning.
-      const jsonStart = beforeCloser.search(/[\[{]/);
-      if (jsonStart === -1) {
+      // If none found, check recentText (JSON might be from a previous chunk).
+      let jsonStart = beforeCloser.search(/[\[{]/);
+      if (jsonStart === -1 && this.recentText) {
+        const recentJson = this.recentText.search(/[\[{]/);
+        if (recentJson !== -1) {
+          // Try to parse the JSON from recentText as a tool call
+          const jsonStr = this.recentText.substring(recentJson);
+          try {
+            const parsed = robustParseJSON(jsonStr);
+            if (parsed && typeof parsed === 'object') {
+              const tc = this.parseToolCall(parsed);
+              if (tc) {
+                result.toolCalls.push(tc);
+                this.emittedToolCallCount++;
+                // Remove the JSON from recentText
+                this.recentText = this.recentText.substring(0, recentJson);
+                cursor = closerIdx + closerLen;
+                continue;
+              }
+            }
+          } catch { /* not valid JSON from recentText */ }
+        }
         cursor = closerIdx + closerLen;
         continue;
       }
