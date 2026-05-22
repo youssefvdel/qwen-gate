@@ -34,6 +34,31 @@ export class SessionPool {
         waiter({ chatId: id, parentId: _newParentId, inUse: true });
       });
     }
+    this.deleteSession(chatId);
+  }
+
+  async deleteSession(chatId: string): Promise<void> {
+    if (process.env.TEST_MOCK_PLAYWRIGHT) return;
+    try {
+      const { cookie, userAgent } = await getBasicHeaders();
+      const response = await fetch(`https://chat.qwen.ai/api/v2/chats/${chatId}`, {
+        method: 'DELETE',
+        headers: {
+          'accept': 'application/json, text/plain, */*',
+          'content-type': 'application/json',
+          'cookie': cookie,
+          'referer': 'https://chat.qwen.ai/',
+          'user-agent': userAgent,
+          'x-request-id': uuidv4(),
+          'source': 'web',
+        },
+      });
+      if (response.ok) {
+        console.log(`[SessionPool] Deleted session ${chatId.substring(0, 8)}...`);
+      }
+    } catch (err: any) {
+      console.debug(`[SessionPool] Failed to delete session ${chatId.substring(0, 8)}...: ${err.message}`);
+    }
   }
 
   getStats(): { total: number; available: number; inUse: number; waiting: number } {
