@@ -8,14 +8,16 @@ process.env.API_KEY = '';
 import { app } from '../index.ts';
 import { initPlaywright, closePlaywright } from '../services/playwright.ts';
 
-test('Health check endpoint returns status ok', async () => {
+test('Health check returns degraded when Playwright not initialized', async () => {
   const req = new Request('http://localhost/health');
   const res = await app.fetch(req);
   
-  assert.strictEqual(res.status, 200);
+  assert.strictEqual(res.status, 503);
   
   const body = await res.json();
-  assert.deepStrictEqual(body, { status: 'ok' });
+  assert.strictEqual(body.status, 'degraded');
+  assert.strictEqual(body.playwright, false);
+  assert.ok(typeof body.uptime === 'number');
 });
 
 test('Models endpoint returns qwen3.6-plus and qwen3.6-plus-no-thinking', async () => {
