@@ -1,7 +1,7 @@
 {
-  "name": "qwenproxy",
-  "version": "1.0.0",
-  "description": "",
+  "name": "qwen-gate",
+  "version": "0.2.0",
+  "description": "OpenAI-compatible API gateway for Qwen models",
   "main": "index.js",
   "scripts": {
     "start": "npx tsx src/index.ts",

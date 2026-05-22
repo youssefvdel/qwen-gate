@@ -1,9 +1,3 @@
-/*
- * File: parser.ts
- * Project: qwenproxy
- * Streaming parser for <tool_call> tags - OpenAI Compatible
- */
-
 import { v4 as uuidv4 } from 'uuid';
 import { robustParseJSON } from '../utils/json.ts';
 import type { ParsedToolCall } from './types.ts';

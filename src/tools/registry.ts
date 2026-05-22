@@ -1,8 +1,4 @@
-/*
- * File: registry.ts
- * Project: qwenproxy
  * Tool registry with register/lookup and OpenAI-compatible schema export
- */
 
 import type {
   FunctionToolDefinition,
@@ -16,7 +12,6 @@ import { validateAgainstSchema, SchemaValidationError } from './schema.ts';
 /**
  * Central tool registry. Tools are registered at startup and looked up by name
  * during the execution loop.
- */
 export class ToolRegistry {
   private tools = new Map<string, ToolRegistration>();
 
@@ -138,5 +133,4 @@ export class ToolRegistry {
 
 /**
  * Singleton registry instance shared across the application.
- */
 export const registry = new ToolRegistry();

@@ -1,7 +1,7 @@
 services:
-  qwenproxy:
+  qwen-gate:
     build: .
-    container_name: qwenproxy
+    container_name: qwen-gate
     ports:
       - "${PORT:-3000}:3000"
     env_file:

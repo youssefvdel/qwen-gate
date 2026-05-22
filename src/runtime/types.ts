@@ -1,8 +1,4 @@
-/*
- * File: types.ts
- * Project: qwenproxy
  * Agent runtime state machine types
- */
 
 import type { Message, ParsedToolCall, ToolCallResult, FunctionToolDefinition, ToolPolicy } from '../types/openai.ts';
 
