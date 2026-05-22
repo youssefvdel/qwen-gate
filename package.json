@@ -4,7 +4,7 @@
   "description": "OpenAI-compatible API gateway for Qwen models",
   "main": "index.js",
   "scripts": {
-    "postinstall": "node scripts/setup.js",
+    "postinstall": "node scripts/setup.js || exit 0",
     "start": "npx tsx src/index.ts",
     "start:firefox": "npx tsx src/index.ts --browser=firefox",
     "start:chrome": "npx tsx src/index.ts --browser=chrome",
