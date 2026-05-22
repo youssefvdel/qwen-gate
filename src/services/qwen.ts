@@ -69,6 +69,42 @@ let lastModelsFetch = 0;
 let nativeToolsDisabled = false;
 let disablingNativeToolsInProgress = false;
 
+export async function setEnglishInstruction(): Promise<void> {
+  try {
+    const { headers } = await getQwenHeaders(false);
+    const payload = {
+      personalization: {
+        name: "",
+        description: "",
+        instruction: "Always think and reason in English. Never use Chinese for any thinking or reasoning steps. All output must be in English.",
+        enable_for_new_chat: true
+      }
+    };
+    const response = await fetch('https://chat.qwen.ai/api/v2/users/user/settings/update', {
+      method: 'POST',
+      headers: {
+        'accept': 'application/json, text/plain, */*',
+        'content-type': 'application/json',
+        'cookie': headers['cookie'],
+        'referer': 'https://chat.qwen.ai/',
+        'user-agent': headers['user-agent'],
+        'x-request-id': uuidv4(),
+        'bx-ua': headers['bx-ua'],
+        'bx-umidtoken': headers['bx-umidtoken'],
+        'bx-v': headers['bx-v']
+      },
+      body: JSON.stringify(payload)
+    });
+    if (response.ok) {
+      console.log('[Qwen] English instruction set successfully.');
+    } else {
+      console.warn('[Qwen] Failed to set English instruction:', await response.text());
+    }
+  } catch (err: any) {
+    console.error(`[Qwen] Error setting English instruction: ${err.message}`);
+  }
+}
+
 export async function disableNativeTools(): Promise<void> {
   if (nativeToolsDisabled || disablingNativeToolsInProgress) {
     return;

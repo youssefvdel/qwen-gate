@@ -341,7 +341,10 @@ async function _getQwenHeadersInternal(forceNew = false): Promise<{ headers: Rec
         lastHeadersTime = Date.now();
 
         await activePage!.unroute('**/*', routeHandler);
-        import('./qwen.ts').then(m => m.disableNativeTools().catch(() => {}));
+        import('./qwen.ts').then(m => {
+  m.disableNativeTools().catch(() => {});
+  m.setEnglishInstruction().catch(() => {});
+});
 
         try { await route.continue(); } catch {}
         finish(extracted);
