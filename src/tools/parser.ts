@@ -333,7 +333,11 @@ export class StreamingToolParser {
       } else {
         const match = this.findThinkStart(this.buffer);
         if (match.index !== -1) {
-          this.buffer = this.buffer.substring(0, match.index) + this.buffer.substring(match.index + match.tag.length);
+          // Emit text before the think tag to result.text (don't let it leak into thinking)
+          if (match.index > 0) {
+            result.text += this.buffer.substring(0, match.index);
+          }
+          this.buffer = this.buffer.substring(match.index + match.tag.length);
           this.insideThinking = true;
           this.thinkEndTag = match.endTag;
         } else {
