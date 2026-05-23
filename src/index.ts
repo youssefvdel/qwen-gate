@@ -59,18 +59,27 @@ app.get('/log/json', (c) => {
 });
 
 app.get('/log/stream', (c) => {
-  c.header('Content-Type', 'text/event-stream');
-  c.header('Cache-Control', 'no-cache');
-  c.header('Connection', 'keep-alive');
-  return honoStream(c, async (stream) => {
-    for (const entry of logStore.getRecent(50)) {
-      await stream.write(`data: ${JSON.stringify(entry)}\n\n`);
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        for (const entry of logStore.getRecent(50)) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(entry)}\n\n`));
+        }
+        const unsub = logStore.subscribe((entry) => {
+          try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(entry)}\n\n`)); } catch {}
+        });
+        try { c.event && 'addEventListener' in c.event && (c.event as any).addEventListener('close', unsub); } catch {}
+      },
+    }),
+    {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      }
     }
-    const unsub = logStore.subscribe(async (entry) => {
-      await stream.write(`data: ${JSON.stringify(entry)}\n\n`);
-    });
-    stream.onAbort(unsub);
-  });
+  );
 });
 
 // OpenAI compatible routes
