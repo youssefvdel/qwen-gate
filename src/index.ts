@@ -121,7 +121,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       console.warn('[Startup] Header pre-warm failed:', err.message);
     }
 
-    const port = parseInt(process.env.PORT || '3000', 10) || 3000;
+    const port = parseInt(process.env.PORT || '26405', 10) || 26405;
     
     const networkIP = getNetworkAddress();
     
