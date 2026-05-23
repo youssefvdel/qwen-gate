@@ -1,6 +1,7 @@
 import { getQwenHeaders, getBasicHeaders } from './playwright.ts';
 import { v4 as uuidv4 } from 'uuid';
 import modelSpecs from '../models.json' with { type: 'json' };
+import { withRetry } from '../utils/retry.ts';
 
 export class RetryableQwenStreamError extends Error {
   readonly retryAfterMs: number;
@@ -279,78 +280,116 @@ export async function createQwenStream(
     ? `https://chat.qwen.ai/api/v2/chat/completions?chat_id=${chatId}`
     : 'https://chat.qwen.ai/api/v2/chat/completions';
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'accept': 'application/json',
-      'accept-language': 'pt-BR,pt;q=0.9',
-      'content-type': 'application/json',
-      'cookie': headers['cookie'],
-      'origin': 'https://chat.qwen.ai',
-      'referer': chatId ? `https://chat.qwen.ai/c/${chatId}` : 'https://chat.qwen.ai/',
-      'sec-fetch-dest': 'empty',
-      'sec-fetch-mode': 'cors',
-      'sec-fetch-site': 'same-origin',
-      'timezone': new Date().toString().split(' (')[0], // Match closer to browser format
-      'user-agent': headers['user-agent'],
-      'x-accel-buffering': 'no',
-      'x-request-id': uuidv4(),
-      'bx-ua': headers['bx-ua'],
-      'bx-umidtoken': headers['bx-umidtoken'],
-      'bx-v': headers['bx-v']
-    },
-    body: JSON.stringify(payload)
-  });
+  const retryConfig = {
+    maxRetries: process.env.RETRY_MAX_ATTEMPTS !== undefined 
+      ? Math.max(0, parseInt(process.env.RETRY_MAX_ATTEMPTS, 10)) 
+      : 2,
+    baseDelayMs: process.env.RETRY_BASE_DELAY_MS !== undefined 
+      ? Math.max(0, parseInt(process.env.RETRY_BASE_DELAY_MS, 10)) 
+      : 500,
+    maxDelayMs: process.env.RETRY_MAX_DELAY_MS !== undefined 
+      ? Math.max(0, parseInt(process.env.RETRY_MAX_DELAY_MS, 10)) 
+      : 10000,
+    backoffMultiplier: process.env.RETRY_BACKOFF_MULTIPLIER !== undefined 
+      ? Math.max(0.1, parseFloat(process.env.RETRY_BACKOFF_MULTIPLIER)) 
+      : 2,
+  };
 
-  if (!response.ok || !response.body) {
-    const errText = await response.text().catch(() => '');
-    const contentType = response.headers.get('content-type') || '';
+  // Check if retries are explicitly disabled
+  const retriesEnabled = process.env.RETRY_ENABLED !== 'false';
 
-    if (contentType.includes('application/json')) {
-      try {
-        const errorJson = JSON.parse(errText);
-        if (errorJson?.data?.details?.includes('chat is in progress') ||
-            errorJson?.data?.details?.includes('The chat is in progress')) {
-          const retryAfterMs = 2000 + Math.floor(Math.random() * 2000);
-          throw new RetryableQwenStreamError(
-            `Qwen: ${errorJson.data.details}`,
-            retryAfterMs,
-          );
-        }
-        if (errorJson?.success === false) {
-          const code = errorJson.data?.code || errorJson.code || 'UpstreamError';
-          const details = errorJson.data?.details || errorJson.message || 'Qwen returned an error';
-          const wait = errorJson.data?.num !== undefined
-            ? ` Wait about ${errorJson.data.num} hour(s) before trying again.`
-            : '';
-          let status: number;
-          if (code === 'RateLimited') status = 429;
-          else if (code === 'Not_Found') status = 404;
-          else if (code === 'UpstreamError') status = 502;
-          else status = 502;
-          throw new QwenUpstreamError(
-            `Qwen upstream error: ${code}: ${details}.${wait}`,
-            code,
-            status,
-          );
-        }
-        if (errorJson?.data?.details?.includes('is not exist') ||
-            errorJson?.data?.details?.includes('not exist') ||
-            errorJson?.data?.details?.includes('does not exist')) {
-          throw new RetryableQwenStreamError(
-            `Qwen: ${errorJson.data.details}`,
-            0,
-          );
-        }
-      } catch (parseOrRetryError) {
-        if (parseOrRetryError instanceof RetryableQwenStreamError ||
-            parseOrRetryError instanceof QwenUpstreamError) {
-          throw parseOrRetryError;
+  const makeRequest = async (): Promise<{ response: Response; headers: Record<string, string> }> => {
+    const { headers: reqHeaders } = await getQwenHeaders(false);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'accept-language': 'pt-BR,pt;q=0.9',
+        'content-type': 'application/json',
+        'cookie': reqHeaders['cookie'],
+        'origin': 'https://chat.qwen.ai',
+        'referer': chatId ? `https://chat.qwen.ai/c/${chatId}` : 'https://chat.qwen.ai/',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-origin',
+        'timezone': new Date().toString().split(' (')[0],
+        'user-agent': reqHeaders['user-agent'],
+        'x-accel-buffering': 'no',
+        'x-request-id': uuidv4(),
+        'bx-ua': reqHeaders['bx-ua'],
+        'bx-umidtoken': reqHeaders['bx-umidtoken'],
+        'bx-v': reqHeaders['bx-v']
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok || !response.body) {
+      const errText = await response.text().catch(() => '');
+      const contentType = response.headers.get('content-type') || '';
+
+      if (contentType.includes('application/json')) {
+        try {
+          const errorJson = JSON.parse(errText);
+          if (errorJson?.data?.details?.includes('chat is in progress') ||
+              errorJson?.data?.details?.includes('The chat is in progress')) {
+            const retryAfterMs = 2000 + Math.floor(Math.random() * 2000);
+            throw new RetryableQwenStreamError(
+              `Qwen: ${errorJson.data.details}`,
+              retryAfterMs,
+            );
+          }
+          if (errorJson?.success === false) {
+            const code = errorJson.data?.code || errorJson.code || 'UpstreamError';
+            const details = errorJson.data?.details || errorJson.message || 'Qwen returned an error';
+            const wait = errorJson.data?.num !== undefined
+              ? ` Wait about ${errorJson.data.num} hour(s) before trying again.`
+              : '';
+            let status: number;
+            if (code === 'RateLimited') status = 429;
+            else if (code === 'Not_Found') status = 404;
+            else if (code === 'UpstreamError') status = 502;
+            else status = 502;
+            throw new QwenUpstreamError(
+              `Qwen upstream error: ${code}: ${details}.${wait}`,
+              code,
+              status,
+            );
+          }
+          if (errorJson?.data?.details?.includes('is not exist') ||
+              errorJson?.data?.details?.includes('not exist') ||
+              errorJson?.data?.details?.includes('does not exist')) {
+            throw new RetryableQwenStreamError(
+              `Qwen: ${errorJson.data.details}`,
+              0,
+            );
+          }
+        } catch (parseOrRetryError) {
+          if (parseOrRetryError instanceof RetryableQwenStreamError ||
+              parseOrRetryError instanceof QwenUpstreamError) {
+            throw parseOrRetryError;
+          }
         }
       }
+
+      const err = new Error(`Failed to fetch from Qwen: ${response.status} ${response.statusText} - ${errText}`);
+      (err as any).status = response.status;
+      throw err;
     }
-    throw new Error(`Failed to fetch from Qwen: ${response.status} ${response.statusText} - ${errText}`);
+
+    return { response, headers: reqHeaders };
+  };
+
+  let result: { response: Response; headers: Record<string, string> };
+
+  if (retriesEnabled && retryConfig.maxRetries > 0) {
+    result = await withRetry(makeRequest, retryConfig);
+  } else {
+    result = await makeRequest();
   }
 
-  return { stream: response.body, headers, uiSessionId: chatId || '' };
+  if (!result.response.body) {
+    throw new Error(`Qwen returned empty response body (status ${result.response.status})`);
+  }
+
+  return { stream: result.response.body, headers: result.headers, uiSessionId: chatId || '' };
 }

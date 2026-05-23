@@ -6,6 +6,7 @@ import { chatCompletions } from './routes/chat.ts';
 import { fetchQwenModels } from './services/qwen.ts';
 import * as dotenv from 'dotenv';
 import { initPlaywright, activePage, BrowserType, getQwenHeaders } from './services/playwright.ts';
+import { initAuth } from './services/auth.ts';
 import { networkInterfaces } from 'os';
 import { logStore } from './services/logStore.ts';
 import { logHtml } from './routes/logPage.ts';
@@ -112,6 +113,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
   initPlaywright(true, browserType).then(async () => {
     console.log(`Playwright initialized (${browserType}).`);
+
+    // Initialize auth AFTER playwright so login uses browser context with WAF headers.
+    // The auth service will use activePage.evaluate() for the API call when available,
+    // giving us proper anti-bot headers and avoiding WAF blocks.
+    initAuth().catch(err => console.warn('[Startup] initAuth failed:', err.message));
 
     console.log('[Startup] Pre-warming headers...');
     try {

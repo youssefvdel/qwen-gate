@@ -1,6 +1,7 @@
 import { chromium, firefox, webkit, BrowserContext, Page } from 'playwright';
 import path from 'path';
 import crypto from 'crypto';
+import { getToken, ensureAuthenticated } from './auth.ts';
 
 export type BrowserType = 'chromium' | 'firefox' | 'webkit' | 'chrome' | 'edge';
 
@@ -70,10 +71,19 @@ export async function getBasicHeaders(): Promise<{ cookie: string, userAgent: st
     cachedUserAgent = await activePage.evaluate(() => navigator.userAgent);
   }
   
-  const cookie = await getCookies();
+  let cookieStr = await getCookies();
+
+  // Inject auth token from our auth service into the cookie if present
+  const authToken = getToken();
+  if (authToken) {
+    const tokenEntry = `token=${authToken}`;
+    // Prepend auth token so it takes priority
+    cookieStr = tokenEntry + (cookieStr ? '; ' + cookieStr : '');
+  }
+
   const bxV = currentHeaders['bx-v'] || '2.5.36';
   
-  return { cookie, userAgent: cachedUserAgent, bxV };
+  return { cookie: cookieStr, userAgent: cachedUserAgent, bxV };
 }
 
 export async function initPlaywright(headless = true, browserType: BrowserType = 'chromium') {
@@ -130,13 +140,7 @@ export async function initPlaywright(headless = true, browserType: BrowserType =
   // Keep an active page to fetch PoW headers on demand
   activePage = await context.newPage();
 
-  const hasCredentials = !!(process.env.QWEN_EMAIL && process.env.QWEN_PASSWORD);
   const hasValidSession = await checkValidSession();
-
-  if (!hasValidSession && !hasCredentials) {
-    console.warn('[Playwright] No valid session AND no credentials in .env. Manual login will be required.');
-  }
-
   if (!hasValidSession) {
     await attemptAutoLogin();
   }
