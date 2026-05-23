@@ -21,6 +21,10 @@ export class StreamingToolParser {
   private emittedToolCallCount = 0;
   private chunksSinceTagChange = 0;
 
+  // When true, feed() returns raw text without any tool call parsing
+  // Controlled by CLEAN_OUTPUT=false env var — for debugging raw Qwen output.
+  public passThrough = false;
+
   // Recent flushed text buffer — enables cross-chunk orphaned tool call detection.
   // When JSON arrives in one chunk and </tool_call> in the next, the orphan
   // extraction searches this buffer for JSON to pair with the closer.
@@ -40,6 +44,10 @@ export class StreamingToolParser {
   private readonly RE_MARKDOWN_FENCE_CLOSE = /```\s*$/gm;
 
   feed(chunk: string): ParserResult {
+    if (this.passThrough) {
+      this.buffer += chunk;
+      return { text: chunk, toolCalls: [] };
+    }
     // Strip backtick fences adjacent to tool_call tags only (not all backticks)
     chunk = chunk.replace(this.RE_BACKTICK_BEFORE_OPEN, '');
     chunk = chunk.replace(this.RE_BACKTICK_AFTER_CLOSE, '');
@@ -109,6 +117,11 @@ export class StreamingToolParser {
 
   flush(): ParserResult {
     const result: ParserResult = { text: '', toolCalls: [] };
+    if (this.passThrough) {
+      result.text = this.buffer;
+      this.buffer = '';
+      return result;
+    }
     if (!this.buffer) return result;
 
     // Strip backtick fences as in feed()

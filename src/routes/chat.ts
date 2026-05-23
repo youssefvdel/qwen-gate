@@ -147,7 +147,12 @@ export async function chatCompletions(c: Context) {
   const logId = uuidv4();
   try {
     const body: OpenAIRequest = await c.req.json();
-    const isStream = body.stream ?? false;
+    // STREAMING env var overrides client's stream setting (true=force stream, false=force non-stream)
+    let isStream = body.stream ?? false;
+    if (process.env.STREAMING === 'true') isStream = true;
+    else if (process.env.STREAMING === 'false') isStream = false;
+    // CLEAN_OUTPUT=false skips tool call parsing — raw Qwen output passes through
+    const cleanOutput = process.env.CLEAN_OUTPUT !== 'false';
     
     const messages = body.messages || [];
 
@@ -352,6 +357,7 @@ export async function chatCompletions(c: Context) {
       let lastFullContent = '';
       let targetResponseId: string | null = null;
       const toolParser = new StreamingToolParser();
+      if (!cleanOutput) toolParser.passThrough = true;
       const toolCallsOut: any[] = [];
       let buffer = '';
       let completionTokens = 0;
@@ -579,6 +585,7 @@ export async function chatCompletions(c: Context) {
       let lastFullContent = '';
       let targetResponseId: string | null = null;
       const toolParser = new StreamingToolParser();
+      if (!cleanOutput) toolParser.passThrough = true;
 
       let buffer = '';
       let completionTokens = 0;

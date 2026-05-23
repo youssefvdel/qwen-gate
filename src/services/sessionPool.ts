@@ -43,6 +43,10 @@ export class SessionPool {
 
   async deleteSession(chatId: string, cachedHeaders?: { cookie: string; userAgent: string }): Promise<void> {
     if (process.env.TEST_MOCK_PLAYWRIGHT) return;
+    if (process.env.DELETE_SESSION === 'false') {
+      console.log(`[SessionPool] DELETE_SESSION=false, keeping ${chatId.substring(0, 8)}...`);
+      return;
+    }
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
