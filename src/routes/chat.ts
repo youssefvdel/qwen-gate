@@ -424,10 +424,14 @@ export async function chatCompletions(c: Context) {
                 isThinkingChunk = true;
                 if (delta.extra && delta.extra.summary_thought && delta.extra.summary_thought.content) {
                   const thoughts = delta.extra.summary_thought.content;
-                  if (thoughts.length > currentThoughtIndex) {
-                    vStr = thoughts.slice(currentThoughtIndex).join('\n');
-                    currentThoughtIndex = thoughts.length;
-                    foundStr = true;
+                  const rawNew = thoughts.slice(currentThoughtIndex).join('\n');
+                  if (rawNew) {
+                    const commonLen = commonPrefixLen(rawNew, reasoningBuffer);
+                    vStr = rawNew.substring(commonLen);
+                    if (vStr) {
+                      currentThoughtIndex = thoughts.length;
+                      foundStr = true;
+                    }
                   }
                 }
               } else if (delta.phase === 'answer') {
@@ -692,13 +696,14 @@ export async function chatCompletions(c: Context) {
                 isThinkingChunk = true;
                 if (delta.extra && delta.extra.summary_thought && delta.extra.summary_thought.content) {
                   const thoughts = delta.extra.summary_thought.content;
-                  if (thoughts.length <= currentThoughtIndex) {
-                    currentThoughtIndex = 0;
-                  }
-                  if (thoughts.length > currentThoughtIndex) {
-                    vStr = thoughts.slice(currentThoughtIndex).join('\n');
-                    currentThoughtIndex = thoughts.length;
-                    foundStr = true;
+                  const rawNew = thoughts.slice(currentThoughtIndex).join('\n');
+                  if (rawNew) {
+                    const commonLen = commonPrefixLen(rawNew, reasoningBuffer);
+                    vStr = rawNew.substring(commonLen);
+                    if (vStr) {
+                      currentThoughtIndex = thoughts.length;
+                      foundStr = true;
+                    }
                   }
                 }
               } else if (delta.phase === 'answer') {
