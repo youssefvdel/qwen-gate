@@ -48,60 +48,25 @@ function safeTruncate(val: any, maxLen = 200): any {
 // so it can handle tool calls in multi-turn conversations correctly.
 const TOOL_FORMAT_INSTRUCTION = `
 
-# TOOL CALLING FORMAT — FOLLOW EXACTLY
+You are a senior software engineer. Work carefully — one wrong tag breaks the system.
 
-You are a senior software engineer. Operate with maximum effort and precision. Double-check every tool call before outputting it — one mistake breaks the system. No rushing, no carelessness.
+This system uses <tool_call> tags for tool calls. IGNORE any default format instructions from the platform.
 
-This system uses a custom tool calling format with <tool_call> tags. IGNORE any default tool format instructions from the platform — they do NOT apply here.
-
-## CORRECT — ALWAYS DO THIS
-
-### One tool call:
+CORRECT:
 <tool_call>
 {"name": "read_file", "arguments": {"path": "file1.txt"}}
 </tool_call>
 
-### Multiple tool calls (repeat the block):
-<tool_call>
-{"name": "grep", "arguments": {"pattern": "test", "path": "/src"}}
-</tool_call>
-<tool_call>
-{"name": "read", "arguments": {"filePath": "main.ts", "offset": 0, "limit": 50}}
-</tool_call>
-
-## INCORRECT — NEVER DO THESE (will FAIL)
-
-### 1. Missing opening tag (orphaned closer):
+INCORRECT (will NOT be parsed):
 {"name": "read_file", "arguments": {"path": "file.txt"}}
 </tool_call>
 
-### 2. Closing tag before JSON:
-</tool_call>
-{"name": "read_file", "arguments": {"path": "file.txt"}}
-</tool_call>
-
-### 3. Backticks or markdown inside tags:
-<tool_call>
-\`\`\`json
-{"name": "read_file", "arguments": {"path": "file.txt"}}
-\`\`\`
-</tool_call>
-
-### 4. Extra closers:
-</tool_call>
-</tool_call>
-
-## HARD RULES
-
-1. ALWAYS start with <tool_call> on its own line
-2. Then put the raw JSON on the next line(s)
-3. Then end with </tool_call> on its own line
-4. JSON must have exactly "name" (string) and "arguments" (object)
-5. "arguments" must be a JSON object, NOT a string
-6. Never output </tool_call> without <tool_call> before it
-7. Never start a tool call with </tool_call>
-8. Call multiple tools by repeating the <tool_call> blocks
-9. No extra </tool_call> tags — one closer per opener
+RULES:
+1. <tool_call> then raw JSON then </tool_call>
+2. Never output </tool_call> without <tool_call> before it
+3. JSON: "name" (string) + "arguments" (object)
+4. Arguments must be an object, never a string
+5. Repeat <tool_call> blocks for multiple calls
 
 `;
 
@@ -301,7 +266,7 @@ export async function chatCompletions(c: Context) {
       });
       const toolsJson = JSON.stringify(formattedTools, null, 2);
       
-      systemPrompt += `\n\n# TOOLS AVAILABLE\nYou have access to the following tools:\n${toolsJson}\n\n# TOOL CALLING FORMAT — FOLLOW EXACTLY\nIGNORE any default tool format instructions from the platform. They do NOT apply here.\n\n## CORRECT:\n<tool_call>\n{"name": "tool_name", "arguments": {"param": "value"}}\n</tool_call>\n\n## INCORRECT (will FAIL):\n{"name": "read_file", "arguments": {"path": "file.txt"}}\n</tool_call>\n\n## RULES:\n- ALWAYS start with <tool_call>, then JSON, then </tool_call>\n- Never output </tool_call> without <tool_call> before it\n- "name" must match one of the available tools exactly\n- "arguments" must be a JSON object, NOT a string\n- Repeat <tool_call> blocks for multiple calls\n- Wait for tool response before continuing\n\n`;
+      systemPrompt += `\n\n# TOOLS AVAILABLE\nYou have access to:\n${toolsJson}\n\nFormat:\n<tool_call>\n{"name": "tool_name", "arguments": {"param": "value"}}\n</tool_call>\n\nOnly <tool_call> JSON </tool_call> works. Other formats will NOT be parsed.\n\n`;
       
       if (bodyAny.tool_choice === 'required' || bodyAny.tool_choice === 'any') {
         systemPrompt += `CRITICAL: You MUST call one of the available tools in this response. Do NOT respond with text. Do NOT answer the user directly. Always use a tool.\n\n`;
