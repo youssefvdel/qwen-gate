@@ -966,8 +966,19 @@ export async function chatCompletions(c: Context) {
       }
       await streamWriter.write('data: [DONE]\n\n');
 
+      // Release the upstream reader to close the TCP connection to Qwen.
+      // Without this, the connection stays open until GC collects the reader.
+      try { reader.cancel(); } catch {}
+      try { reader.releaseLock(); } catch {}
+
+      // Explicitly close the stream writer so the HTTP response ends immediately.
+      // Without this, Hono buffers the final [DONE] until the callback resolves,
+      // causing the client to hang waiting for connection close.
+      clearInterval(heartbeatInterval);
+      try { await streamWriter.close(); } catch {}
+
       } finally {
-        clearInterval(heartbeatInterval);
+        clearInterval(heartbeatInterval); // redundant but safe if early error
         sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail);
       }
     });
