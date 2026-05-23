@@ -68,10 +68,16 @@ export class StreamingToolParser {
     const result: ParserResult = { text: '', toolCalls: [] };
 
     // Step 1: Extract any orphaned tool calls first (model outputs JSON without
-    // opening <tool_call> tag). This must run before the tag-based loop below
-    // so orphaned calls are caught even when proper tags exist later in the buffer.
+    // opening <tool_call> tag). This must run before the tag-based loop below.
+    const preExtractLen = this.buffer.length;
     this.buffer = this.extractOrphanedToolCalls(this.buffer, result);
-    if (this.insideTool) this.insideTool = false;
+    // If orphan extraction consumed content (found tool calls), reset insideTool.
+    // The remaining buffer is plain text after extraction.
+    if (this.buffer.length < preExtractLen) {
+      this.insideTool = false;
+    }
+    // Otherwise, keep insideTool intact — the opening tag is still waiting
+    // for its closing tag from a future chunk.
 
     // Step 2: Normal tag-based parsing for remaining buffer
     while (this.buffer.length > 0) {
