@@ -100,15 +100,16 @@ export function parseToolCallsFromContent(content: string): {
       const parsed = robustParseJSON(jsonStr);
       if (!parsed || typeof parsed !== 'object') throw new Error('Invalid JSON');
 
+      let args = parsed.arguments;
+      if (typeof args === 'string') {
+        try { args = JSON.parse(args); } catch { args = {}; }
+      }
+      if (typeof args !== 'object' || Array.isArray(args)) args = {};
+
       toolCalls.push({
         id: 'call_' + uuidv4(),
         name: parsed.name || '',
-        arguments: parsed.arguments
-          ? (typeof parsed.arguments === 'string' ? JSON.parse(parsed.arguments) : parsed.arguments)
-          : (() => {
-              const { name, ...rest } = parsed;
-              return rest;
-            })(),
+        arguments: args || (() => { const { name, ...rest } = parsed; return rest; })(),
       });
     } catch {
       textContent += jsonStr;
@@ -190,6 +191,23 @@ function buildAssistantToolCallMessage(
   return msg;
 }
 
+function normalizeToolCalls(toolCalls: ParsedToolCall[]): { fixed: ParsedToolCall[] } {
+  const fixed: ParsedToolCall[] = [];
+  for (const tc of toolCalls) {
+    try {
+      let args = tc.arguments;
+      if (typeof args === 'string') {
+        try { args = JSON.parse(args); } catch { continue; }
+      }
+      if (typeof args !== 'object' || Array.isArray(args) || !args) continue;
+      const name = tc.name?.trim() || '';
+      if (!name) continue;
+      fixed.push({ id: tc.id || 'call_' + uuidv4(), name, arguments: args });
+    } catch { continue; }
+  }
+  return { fixed };
+}
+
 export async function runExecutionLoop(
   sendToLLM: LLMSendFunction,
   messages: unknown[],
@@ -244,18 +262,42 @@ export async function runExecutionLoop(
         consecutiveGuardFailures = 1;
         lastGuardErrors = errorKey;
       }
+
       if (consecutiveGuardFailures >= 3) {
-        throw new Error(
-          `Tool call format correction failed after ${consecutiveGuardFailures} attempts. ` +
-          `Errors: ${guardResult.errors.join('; ')}`
-        );
+        const normResult = normalizeToolCalls(effectiveToolCalls);
+        if (normResult.fixed.length > 0) {
+          if (debug) console.log(`[executor] Auto-repaired ${normResult.fixed.length} tool calls`);
+          effectiveToolCalls.length = 0;
+          effectiveToolCalls.push(...normResult.fixed);
+          const repairedGuard = validateToolCalls(effectiveToolCalls);
+          if (repairedGuard.ok) {
+            consecutiveGuardFailures = 0;
+          } else {
+            throw new Error(
+              `Tool call format correction failed after auto-repair. ` +
+              `Original: ${guardResult.errors.join('; ')}. Fixed: ${repairedGuard.errors.join('; ')}`
+            );
+          }
+        } else {
+          throw new Error(
+            `Tool call format correction failed after ${consecutiveGuardFailures} attempts. ` +
+            `Errors: ${guardResult.errors.join('; ')}`
+          );
+        }
       }
+
       if (debug) {
-        console.log('[executor] Tool call validation FAILED:', guardResult.errors);
+        console.log(`[executor] Turn ${turn+1}: tool call validation FAILED (attempt ${consecutiveGuardFailures}/3):`, guardResult.errors);
       }
+
+      const escalation = [
+        '',
+        `  FIX YOUR FORMAT. Use: {"name":"tool","arguments":{"key":"value"}}`,
+        `  CRITICAL: Your tool calls are STILL broken. You MUST output PURE JSON with no XML tags, no markdown fences, no stringified arguments. Correct format: {"name":"tool_name","arguments":{"param":"value"}}`,
+      ];
       messages.push({
         role: 'system',
-        content: guardResult.correctionPrompt,
+        content: guardResult.correctionPrompt + (escalation[consecutiveGuardFailures - 1] || ''),
       });
       continue;
     }
