@@ -33,6 +33,7 @@ export class StreamingToolParser {
 
     if (!this.skipPreProcess) {
       chunk = chunk.replace(/```(?:json)?\s*/g, '').replace(/```\s*/g, '');
+      chunk = chunk.replace(/<\/?(?:tool_call|tool_use|function_call)\s*>/gi, '');
     }
 
     this.buffer += chunk;

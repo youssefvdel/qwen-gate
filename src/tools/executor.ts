@@ -52,16 +52,16 @@ export function parseToolCallsFromContent(content: string): {
       break;
     }
 
-    if (nameIdx > 0) {
-      textContent += remaining.substring(0, nameIdx);
-    }
-
     const searchFrom = Math.max(0, nameIdx - 300);
     const braceIdx = remaining.lastIndexOf('{', nameIdx);
     if (braceIdx === -1 || braceIdx < searchFrom) {
       textContent += remaining[0] || '';
       remaining = remaining.substring(1);
       continue;
+    }
+
+    if (braceIdx > 0) {
+      textContent += remaining.substring(0, braceIdx);
     }
 
     let after = remaining.substring(braceIdx);

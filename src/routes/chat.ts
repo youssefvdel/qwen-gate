@@ -84,16 +84,23 @@ const TOOL_FORMAT_INSTRUCTION = `
 4. NEVER output "arguments" as a JSON string — it must be a JSON object
 5. NEVER output "name" as anything other than a plain string
 
+### BLOCKED FORMATS — NEVER USE THESE
+<tool_call>{"name": "read_file", "arguments": {}}</tool_call>
+<tool_use>{"name": "read_file", "arguments": {}}</tool_use>
+<function_call>{"name": "read_file", "arguments": {}}</function_call>
+<function_calls><invoke name="read_file"><parameter name="path">f.txt</parameter></invoke></function_calls>
+\`\`\`json\n{"name": "read_file", "arguments": {}}\n\`\`\`
+
 ### CORRECT FORMAT
 {"name": "read_file", "arguments": {"path": "src/main.ts"}}
 {"name": "glob", "arguments": {"pattern": "**/*.ts"}}
 {"name": "bash", "arguments": {"command": "ls -la"}}
 
 ### WRONG FORMAT
+<tool_call>{"name": "read_file", "arguments": {"path": "file.txt"}}</tool_call>
 \`\`\`json
 {"name": "read_file", "arguments": {"path": "file.txt"}}
 \`\`\`
-<tool_call>{"name": "read_file", "arguments": {"path": "file.txt"}}</tool_call>
 {"name": "read_file", "arguments": "{\\"path\\": \\"file.txt\\"}"}
 Thinking: I should read the file... {"name": "read_file", ...}
 `;

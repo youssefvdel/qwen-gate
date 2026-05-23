@@ -28,6 +28,8 @@ export function checkProviderToolLeak(content: string, role?: string): ProviderT
   }
   if (!content) return { detected: false };
   if (/<tool_use>[\s\S]*?<\/tool_use>/i.test(content)) return { detected: true, reason: 'Provider emitted <tool_use> XML format', type: 'tool_use_xml' };
+  if (/<tool_call>[\s\S]*?<\/tool_call>/i.test(content)) return { detected: true, reason: 'Provider emitted <tool_call> XML format', type: 'tool_use_xml' };
+  if (/<function_call>[\s\S]*?<\/function_call>/i.test(content)) return { detected: true, reason: 'Provider emitted <function_call> XML format', type: 'function_call_json' };
   if (/"function":\s*\{[^}]*"name":\s*"[^"]+"/i.test(content)) return { detected: true, reason: 'Provider emitted function_call JSON format', type: 'function_call_json' };
   return { detected: false };
 }
