@@ -71,42 +71,6 @@ let lastModelsFetch = 0;
 let nativeToolsDisabled = false;
 let disablingNativeToolsInProgress: Promise<void> | null = null;
 
-export async function setEnglishInstruction(): Promise<void> {
-  try {
-    const { headers } = await getQwenHeaders(false);
-    const payload = {
-      personalization: {
-        name: "",
-        description: "",
-        instruction: "Always think and reason in English. Never use Chinese. All output must be in English.\n\n## OUTPUT RULES\n\n### ALWAYS DO\n1. Output tool calls as pure JSON: {\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}\n2. Keep \"name\" as a string and \"arguments\" as a JSON object\n3. Multiple tool calls on separate lines, one JSON per line\n4. Text answers as plain text — no special formatting\n5. Think internally — reasoning stays private\n\n### NEVER DO\n1. NEVER output <tool_call>, <tool_use>, <function_call>, <function_calls>, <invoke>, <parameter>, <think>, <thinking>, <thought>, or any XML tags\n2. NEVER wrap tool calls in markdown fences or XML\n3. NEVER prefix answers with \"Thinking:\", \"I am evaluating\", \"Let me\", or reasoning text\n4. NEVER output \"arguments\" as a JSON string — must be an object\n5. NEVER output \"name\" as anything other than a string\n\n### BLOCKED — NEVER USE\n<tool_call>{\"name\":\"read\",\"arguments\":{}}</tool_call>\n<tool_use>{\"name\":\"read\",\"arguments\":{}}</tool_use>\n<function_call>{\"name\":\"read\",\"arguments\":{}}</function_call>\n<function_calls><invoke name=\"read\"><parameter name=\"path\">f.txt</parameter></invoke></function_calls>\n```json\\n{\"name\":\"read\",\"arguments\":{}}\\n```\n\n### CORRECT\n{\"name\":\"read_file\",\"arguments\":{\"path\":\"file.txt\"}}\n{\"name\":\"bash\",\"arguments\":{\"command\":\"ls\"}}",
-        enable_for_new_chat: true
-      }
-    };
-    const response = await fetch('https://chat.qwen.ai/api/v2/users/user/settings/update', {
-      method: 'POST',
-      headers: {
-        'accept': 'application/json, text/plain, */*',
-        'content-type': 'application/json',
-        'cookie': headers['cookie'],
-        'referer': 'https://chat.qwen.ai/',
-        'user-agent': headers['user-agent'],
-        'x-request-id': uuidv4(),
-        'bx-ua': headers['bx-ua'],
-        'bx-umidtoken': headers['bx-umidtoken'],
-        'bx-v': headers['bx-v']
-      },
-      body: JSON.stringify(payload)
-    });
-    if (response.ok) {
-      console.log('[Qwen] English instruction set successfully.');
-    } else {
-      console.warn('[Qwen] Failed to set English instruction:', await response.text());
-    }
-  } catch (err: any) {
-    console.error(`[Qwen] Error setting English instruction: ${err.message}`);
-  }
-}
-
 export async function disableNativeTools(): Promise<void> {
   if (nativeToolsDisabled) return;
   if (disablingNativeToolsInProgress) {
