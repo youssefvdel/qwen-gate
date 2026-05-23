@@ -34,9 +34,13 @@ export class SessionPool {
   release(chatId: string, _newParentId: string | null, cachedHeaders?: { cookie: string; userAgent: string }): void {
     const waiter = this.waiting.shift();
     if (waiter) {
-      Promise.all([getBasicHeaders(), this.createSession()]).then(([{ cookie, userAgent }, id]) => {
-        waiter({ chatId: id, parentId: _newParentId, inUse: true, cachedHeaders: { cookie, userAgent } });
-      });
+      Promise.all([getBasicHeaders(), this.createSession()])
+        .then(([{ cookie, userAgent }, id]) => {
+          waiter({ chatId: id, parentId: _newParentId, inUse: true, cachedHeaders: { cookie, userAgent } });
+        })
+        .catch(err => {
+          console.error('[SessionPool] Failed to create session for waiter:', err.message);
+        });
     }
     this.deleteSession(chatId, cachedHeaders);
   }

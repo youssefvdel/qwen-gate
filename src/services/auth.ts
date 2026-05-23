@@ -11,6 +11,7 @@ const AUTH_REFRESH_BEFORE_MS = parseInt(process.env.AUTH_REFRESH_BEFORE_MS || St
 
 let authState: AuthState | null = null;
 let refreshing = false;
+let refreshPromise: Promise<boolean> | null = null;
 let initDone = false;
 
 export function needsRefresh(): boolean {
@@ -122,35 +123,35 @@ export async function ensureAuthenticated(): Promise<boolean> {
   }
 
   if (refreshing) {
-    while (refreshing) {
-      await new Promise(r => setTimeout(r, 100));
-    }
+    if (refreshPromise) await refreshPromise;
     return authState !== null && !needsRefresh();
   }
 
   refreshing = true;
-  try {
-    if (authState?.refreshToken && authState.expiresAt > Date.now()) {
-      console.log('[Auth] Token expired, attempting refresh...');
-      if (await tryRefreshToken()) {
+  refreshPromise = (async () => {
+    try {
+      if (authState?.refreshToken && authState.expiresAt > Date.now()) {
+        console.log('[Auth] Token expired, attempting refresh...');
+        if (await tryRefreshToken()) {
+          return true;
+        }
+        console.warn('[Auth] Refresh failed, re-logging in...');
+      } else if (authState && !needsRefresh()) {
         return true;
       }
-      console.warn('[Auth] Refresh failed, re-logging in...');
-    } else if (authState && !needsRefresh()) {
-      return true;
+      const newState = await loginFresh();
+      if (newState) {
+        authState = newState;
+        return true;
+      }
+      console.error('[Auth] All auth methods failed.');
+      return false;
+    } finally {
+      refreshing = false;
+      refreshPromise = null;
     }
-
-    const newState = await loginFresh();
-    if (newState) {
-      authState = newState;
-      return true;
-    }
-
-    console.error('[Auth] All auth methods failed.');
-    return false;
-  } finally {
-    refreshing = false;
-  }
+  })();
+  return refreshPromise;
 }
 
 export async function initAuth(): Promise<void> {

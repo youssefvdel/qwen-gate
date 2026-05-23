@@ -70,7 +70,10 @@ app.get('/log/stream', (c) => {
         const unsub = logStore.subscribe((entry) => {
           try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(entry)}\n\n`)); } catch {}
         });
-        try { c.event && 'addEventListener' in c.event && (c.event as any).addEventListener('close', unsub); } catch {}
+        const signal = c.req.raw?.signal;
+        if (signal) {
+          signal.addEventListener('abort', () => { unsub(); try { controller.close(); } catch {} });
+        }
       },
     }),
     {
