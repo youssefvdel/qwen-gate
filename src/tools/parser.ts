@@ -2,6 +2,12 @@
  * File: parser.ts
  * Project: qwenproxy
  * Streaming parser for <tool_call> tags - OpenAI Compatible
+ *
+ * Key design: uses JSON-depth tracking (not literal tag matching) to find
+ * tool call boundaries. After <tool_call>, we scan for the opening {/[,
+ * then walk with a bracket-depth+string-aware state machine. When depth
+ * returns to 0 the JSON is complete. This means literal </tool_call>
+ * strings inside JSON arguments CANNOT break parsing.
  */
 
 import { v4 as uuidv4 } from 'uuid';
@@ -26,10 +32,9 @@ export class StreamingToolParser {
   private thinkEndTag: string = '';
   private thinkBuffer = '';
   private readonly THINK_TAGS: Array<{ start: string; end: string }> = [
-    { start: '<think>', end: '</think>' },
-    { start: '<thinking>', end: '</thinking>' },
+    { start: '<' + 'think>', end: '<' + '/' + 'think>' },
+    { start: '<' + 'thinking>', end: '<' + '/' + 'thinking>' },
   ];
-
   public passThrough = false;
   public skipPreProcess = false;
   public bufferToolCalls = false;
@@ -124,11 +129,20 @@ export class StreamingToolParser {
           this.chunksSinceTagChange = 0;
           break;
         }
-        const endIdx = this.buffer.indexOf(this.TOOL_END);
-        if (endIdx !== -1) {
+
+        const jsonEnd = this.findJsonEnd(this.buffer);
+        if (jsonEnd !== -1) {
           this.chunksSinceTagChange = 0;
-          const content = this.buffer.substring(0, endIdx);
-          this.buffer = this.buffer.substring(endIdx + this.TOOL_END.length);
+          const content = this.buffer.substring(0, jsonEnd);
+          this.buffer = this.buffer.substring(jsonEnd);
+
+          const closingTag = this.buffer.indexOf(this.TOOL_END);
+          if (closingTag !== -1 && closingTag < 20) {
+            this.buffer = this.buffer.substring(closingTag + this.TOOL_END.length);
+          } else if (this.buffer.startsWith(this.TOOL_END)) {
+            this.buffer = this.buffer.substring(this.TOOL_END.length);
+          }
+
           if (this.bufferToolCalls) {
             this.emitBufferedText(result);
           }
@@ -141,6 +155,52 @@ export class StreamingToolParser {
     }
 
     return result;
+  }
+
+  private findJsonEnd(buf: string): number {
+    let i = 0;
+    while (i < buf.length && (buf[i] === ' ' || buf[i] === '\t' || buf[i] === '\n' || buf[i] === '\r')) {
+      i++;
+    }
+    if (i >= buf.length) return -1;
+    const first = buf[i];
+    if (first !== '{' && first !== '[') return -1;
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    for (; i < buf.length; i++) {
+      const c = buf[i];
+
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+
+      if (c === '\\') {
+        escaped = true;
+        continue;
+      }
+
+      if (c === '"') {
+        inString = !inString;
+        continue;
+      }
+
+      if (inString) continue;
+
+      if (c === '{' || c === '[') {
+        depth++;
+      } else if (c === '}' || c === ']') {
+        depth--;
+        if (depth === 0) {
+          return i + 1;
+        }
+      }
+    }
+
+    return -1;
   }
 
   private emitBufferedText(result: ParserResult): void {
@@ -185,10 +245,29 @@ export class StreamingToolParser {
     this.extractThinking(result);
 
     if (this.insideTool) {
-      if (this.bufferToolCalls) {
-        this.emitBufferedText(result);
+      const jsonEnd = this.findJsonEnd(this.buffer);
+      if (jsonEnd !== -1) {
+        const content = this.buffer.substring(0, jsonEnd);
+        this.buffer = this.buffer.substring(jsonEnd);
+        const closingTag = this.buffer.indexOf(this.TOOL_END);
+        if (closingTag !== -1 && closingTag < 20) {
+          this.buffer = this.buffer.substring(closingTag + this.TOOL_END.length);
+        } else if (this.buffer.startsWith(this.TOOL_END)) {
+          this.buffer = this.buffer.substring(this.TOOL_END.length);
+        }
+        if (this.bufferToolCalls) {
+          this.emitBufferedText(result);
+        }
+        this.processToolContent(content, result);
+        this.insideTool = false;
+      } else {
+        if (this.bufferToolCalls) {
+          this.emitBufferedText(result);
+        }
+        result.text += this.buffer;
+        this.buffer = '';
+        this.insideTool = false;
       }
-      this.processToolContent(this.buffer, result);
     } else {
       const remaining = this.extractOrphanedToolCalls(this.buffer, result);
       if (remaining !== this.buffer) {
@@ -399,24 +478,28 @@ export class StreamingToolParser {
         continue;
       }
 
-      let jsonStart = beforeCloser.search(/[\[{]/);
+      const jsonStart = beforeCloser.search(/[\[{]/);
       if (jsonStart === -1 && this.recentText) {
         const recentJson = this.recentText.search(/[\[{]/);
         if (recentJson !== -1) {
           const jsonStr = this.recentText.substring(recentJson);
-          try {
-            const parsed = robustParseJSON(jsonStr);
-            if (parsed && typeof parsed === 'object') {
-              const tc = this.parseToolCall(parsed);
-              if (tc) {
-                result.toolCalls.push(tc);
-                this.emittedToolCallCount++;
-                this.recentText = this.recentText.substring(0, recentJson);
-                cursor = closerIdx + closerLen;
-                continue;
+          const end = this.findJsonEnd(jsonStr);
+          if (end !== -1) {
+            const jsonContent = jsonStr.substring(0, end);
+            try {
+              const parsed = robustParseJSON(jsonContent);
+              if (parsed && typeof parsed === 'object') {
+                const tc = this.parseToolCall(parsed);
+                if (tc) {
+                  result.toolCalls.push(tc);
+                  this.emittedToolCallCount++;
+                  this.recentText = this.recentText.substring(0, recentJson);
+                  cursor = closerIdx + closerLen;
+                  continue;
+                }
               }
-            }
-          } catch { /* not valid JSON from recentText */ }
+            } catch { /* not valid JSON from recentText */ }
+          }
         }
         cursor = closerIdx + closerLen;
         continue;
@@ -428,7 +511,16 @@ export class StreamingToolParser {
         continue;
       }
 
-      const jsonStr = beforeCloser.substring(jsonStart);
+      const afterJson = beforeCloser.substring(jsonStart);
+      const jsonEnd = this.findJsonEnd(afterJson);
+
+      if (jsonEnd === -1) {
+        if (isPartial) break;
+        cursor = closerIdx + 1;
+        continue;
+      }
+
+      const jsonStr = afterJson.substring(0, jsonEnd);
 
       try {
         const parsed = robustParseJSON(jsonStr);
