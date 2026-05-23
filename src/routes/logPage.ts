@@ -55,6 +55,12 @@ export const logHtml = `<!DOCTYPE html>
   .empty { color: #484f58; font-style: italic; font-size: 0.85rem; }
 
   .truncated { color: #d29922; font-size: 0.75rem; }
+  .side-by-side { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 800px) { .side-by-side { grid-template-columns: 1fr; } }
+  .raw-output { background: #0d1117; border: 1px solid #30363d; border-radius: 4px; padding: 8px; font-size: 0.8rem; font-family: monospace; white-space: pre-wrap; word-break: break-all; max-height: 400px; overflow-y: auto; }
+  .proc-output { background: #0d1117; border: 1px solid #23863666; border-radius: 4px; padding: 8px; font-size: 0.8rem; font-family: monospace; white-space: pre-wrap; word-break: break-all; max-height: 400px; overflow-y: auto; }
+  .raw-label { background: #d2992233; color: #d29922; font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; display: inline-block; margin-bottom: 4px; }
+  .proc-label { background: #23863633; color: #3fb950; font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; display: inline-block; margin-bottom: 4px; }
 
   .highlight { background: #d2992233; border: 1px solid #d2992266; border-radius: 4px; padding: 8px; margin: 6px 0; }
   .highlight-tool { background: #1f6feb33; border: 1px solid #1f6feb66; }
@@ -126,14 +132,33 @@ function renderEntry(entry, isNew) {
     html += '</div>';
   }
 
-  // Raw Qwen chunks
-  if (hasChunks) {
-    html += '<div class="section"><div class="section-title">Qwen → Proxy (raw chunks, ' + entry.qwenRawChunks.length + ')</div>';
-    for (const chunk of entry.qwenRawChunks) {
-      const isToolChunk = chunk.includes('<tool_call>') || chunk.includes('</tool_call>');
-      html += '<div class="chunk' + (isToolChunk ? ' tool-call' : '') + '">' + escapeHtml(chunk.length > 500 ? chunk.slice(0, 500) + '...' : chunk) + '</div>';
+  // Side-by-side: raw Qwen output vs processed output  
+  if (entry.rawFullContent || hasChunks) {
+    html += '<div class="section"><div class="section-title">Qwen Output: RAW (left) vs PROCESSED (right)</div>';
+    html += '<div class="side-by-side">';
+    
+    // Left: raw output
+    const rawContent = entry.rawFullContent || (entry.qwenRawChunks || []).join('');
+    html += '<div><div class="raw-label">RAW — before filtering</div><div class="raw-output">';
+    html += escapeHtml(rawContent.length > 2000 ? rawContent.slice(0, 2000) + '\n... [truncated]' : rawContent);
+    html += '</div></div>';
+    
+    // Right: processed output (tool calls + remaining text)
+    html += '<div><div class="proc-label">PROCESSED — after parsing</div><div class="proc-output">';
+    if (entry.parsedToolCalls && entry.parsedToolCalls.length > 0) {
+      for (const tc of entry.parsedToolCalls) {
+        html += '<span style="color:#58a6ff;font-weight:600;">→ Tool call:</span> ' + escapeHtml(tc.name) + '(' + escapeHtml(tc.args ? tc.args.slice(0, 300) : '') + ')\n';
+      }
     }
-    html += '</div>';
+    if (entry.remainingText) {
+      html += escapeHtml(entry.remainingText.slice(0, 1000));
+    }
+    if ((!entry.parsedToolCalls || entry.parsedToolCalls.length === 0) && !entry.remainingText) {
+      html += '<span class="empty">(no tool calls or remaining content captured)</span>';
+    }
+    html += '</div></div>';
+    
+    html += '</div></div>';
   }
 
   // Parsed tool calls

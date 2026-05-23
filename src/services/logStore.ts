@@ -24,8 +24,10 @@ export interface LogEntry {
     totalLength: number;
     preview: string;
   };
-  // Qwen -> Proxy (raw chunks)
+  // Qwen -> Proxy (raw chunks, before any filtering)
   qwenRawChunks: string[];
+  // Full raw output (all chunks joined, before processing)
+  rawFullContent: string;
   // Proxy -> Qwen tool results (if any)
   toolCallResults: Array<{ name: string; isError: boolean; result: string }>;
   // Parser
@@ -68,6 +70,7 @@ class LogStore {
         preview: '',
       },
       qwenRawChunks: [],
+      rawFullContent: '',
       toolCallResults: [],
       parsedToolCalls: [],
       remainingText: '',

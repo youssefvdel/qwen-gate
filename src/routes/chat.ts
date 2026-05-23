@@ -429,6 +429,10 @@ export async function chatCompletions(c: Context) {
                 if (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"')) {
                   logStore.addRawChunk(logId, vStr);
                 }
+                if (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"') || vStr.includes('{')) {
+                  logStore.addRawChunk(logId, vStr);
+                  logStore.updateEntry(logId, entry => { entry.rawFullContent += vStr; });
+                }
                 if (process.env.DEBUG && (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"'))) {
                   logDebug('QWEN RAW CHUNK (non-streaming)', vStr);
                 }
@@ -662,8 +666,9 @@ export async function chatCompletions(c: Context) {
                 });
               } else {
                 inThinkingState = false;
-                if (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"')) {
+                if (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"') || vStr.includes('{')) {
                   logStore.addRawChunk(logId, vStr);
+                  logStore.updateEntry(logId, entry => { entry.rawFullContent += vStr; });
                 }
                 if (process.env.DEBUG && (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"'))) {
                   logDebug('QWEN RAW CHUNK (streaming)', vStr);
