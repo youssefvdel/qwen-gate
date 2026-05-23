@@ -714,10 +714,9 @@ export async function chatCompletions(c: Context) {
                 });
               } else {
                 inThinkingState = false;
-                // Skip chunks that are just stray </tool_call> closers — these should
-                // never be emitted as content. They sometimes arrive as separate chunks
-                // after the tool call JSON has already been parsed.
-                if (/^[\n\s]*<\/tool_call>[\n\s]*$/.test(vStr)) continue;
+                // Strip stray tag closers that arrive as separate chunks after the
+                // content has been parsed.
+                if (/^[\n\s]*<\/?(?:tool_call|think|thinking)[\s>]*[\n\s]*$/.test(vStr)) continue;
 
                 if (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"') || vStr.includes('{')) {
                   logStore.addRawChunk(logId, vStr);
@@ -754,12 +753,16 @@ export async function chatCompletions(c: Context) {
                 // If any tool call fails guard, suppress the text too so it doesn't
                 // pollute the client context and teach the model wrong formats.
                 const pendingText = (toolCalls.length > 0 && text) ? text : null;
-                // Strip stray </tool_call> closers that Qwen sometimes sends as separate
-                // chunks after tool call emission. These are not normal text — they must
-                // never reach the client.
+                // Clean answer text — strip stray tag closers/chunks and inline think tags
+                const cleanText = (text: string) => text
+                  .replace(/^[\n\s]*<\/?(?:tool_call|think|thinking)[\s>]*[\n\s]*/g, '')
+                  .replace(/<\/?(?:think|thinking)>/gi, '')
+                  .replace(/^[\n\s]*>[\n\s]*/, '')  // trailing '>' from broken </tool_call>
+                  .replace(/[\n\s]*$/, '');
+
                 const cleanedText = pendingText
-                  ? pendingText.replace(/^[\n\s]*<\/tool_call>[\n\s]*/g, '').replace(/<\/tool_call>[\n\s]*$/g, '')
-                  : (text ? text.replace(/^[\n\s]*<\/tool_call>[\n\s]*/g, '').replace(/<\/tool_call>[\n\s]*$/g, '') : null);
+                  ? cleanText(pendingText)
+                  : (text ? cleanText(text) : null);
                 if (cleanedText) {
                   await writeEvent({
                     id: completionId,
@@ -856,14 +859,21 @@ export async function chatCompletions(c: Context) {
           choices: [makeChoice({ reasoning_content: remainingThinking })]
         });
       }
+      const cleanText = (t: string) => t
+        .replace(/<\/?(?:think|thinking)>/gi, '')
+        .replace(/^[\n\s]*<\/?tool_call[\s>]*[\n\s]*/g, '')
+        .replace(/[\n\s]*$/, '');
       if (remainingText) {
-        await writeEvent({
-          id: completionId,
-          object: 'chat.completion.chunk',
-          created: Math.floor(Date.now() / 1000),
-          model: body.model,
-          choices: [makeChoice({ content: remainingText })]
-        });
+        const ct = cleanText(remainingText);
+        if (ct) {
+          await writeEvent({
+            id: completionId,
+            object: 'chat.completion.chunk',
+            created: Math.floor(Date.now() / 1000),
+            model: body.model,
+            choices: [makeChoice({ content: ct })]
+          });
+        }
       }
       for (const tc of remainingToolCalls) {
         // Guard: validate tool call before emitting to client
