@@ -66,6 +66,3 @@ function createInitialState(
 }
 
 // ─── Tool Execution ────────────────────────────────────────────────────────────
-
-const TOOL_START_TAG = '<' + 'tool_call>';
-const TOOL_END_TAG = '</' + 'tool_call>';

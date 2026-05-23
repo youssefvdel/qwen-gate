@@ -62,7 +62,7 @@ function getNewContent(text: string, lastEmittedText: string): string {
 }
 
 function cleanThinkTags(t: string): string {
-  return t.replace(/<\/?(?:think|thinking|thought)>/gi, '');
+  return t.replace(/<\/?(?:think|thinking|thought|tool_call|tool_use|function_call)>/gi, '');
 }
 
 // Always-injected tool calling format instruction — model must know the format even when no tools are provided
@@ -729,7 +729,7 @@ export async function chatCompletions(c: Context) {
                 inThinkingState = false;
                 // Strip stray tag closers that arrive as separate chunks after the
                 // content has been parsed.
-                if (/^[\n\s]*<\/?(?:think|thinking)[\s>]*[\n\s]*$/.test(vStr)) continue;
+                if (/^[\n\s]*<\/?(?:think|thinking|thought|tool_call|tool_use|function_call)[\s>]*[\n\s]*$/.test(vStr)) continue;
 
                 if (vStr.includes('"name"') || vStr.includes('{')) {
                   logStore.addRawChunk(logId, vStr);
