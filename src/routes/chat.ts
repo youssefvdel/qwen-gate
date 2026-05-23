@@ -10,6 +10,7 @@ import { StreamingToolParser } from '../tools/parser.ts';
 import { RetryableQwenStreamError } from '../services/qwen.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import modelSpecs from '../models.json' with { type: 'json' };
+import { logStore } from '../services/logStore.ts';
 
 // Debug logging — enabled via DEBUG=true env var
 function logDebug(label: string, data: any) {
@@ -143,14 +144,26 @@ function parseQwenErrorPayload(raw: string): { message: string; status: number }
 }
 
 export async function chatCompletions(c: Context) {
+  const logId = uuidv4();
   try {
     const body: OpenAIRequest = await c.req.json();
     const isStream = body.stream ?? false;
     
     const messages = body.messages || [];
 
+
+    const bodyAny = body as any;
+    const logEntry = logStore.createEntry(logId, body.model, isStream);
+    logEntry.clientRequest = {
+      messageCount: messages.length,
+      roles: messages.map(m => m.role),
+      hasTools: !!(bodyAny.tools?.length),
+      toolNames: bodyAny.tools?.map((t: any) => t.function?.name || t.name) || [],
+      tool_choice: bodyAny.tool_choice ? (typeof bodyAny.tool_choice === 'string' ? bodyAny.tool_choice : JSON.stringify(bodyAny.tool_choice)) : null,
+      lastMessage: messages.length > 0 ? safeTruncate(messages[messages.length - 1].content, 300) : '',
+    };
+
     if (process.env.DEBUG) {
-      const bodyAny = body as any;
       logDebug('INCOMING REQUEST', {
         model: body.model,
         stream: isStream,
@@ -237,7 +250,6 @@ export async function chatCompletions(c: Context) {
     }
 
     // Always inject tool calling format instruction — model must always know the format
-    const bodyAny = body as any;
     systemPrompt += TOOL_FORMAT_INSTRUCTION;
 
     // Inject tools available and tool_choice if provided
@@ -268,6 +280,13 @@ export async function chatCompletions(c: Context) {
     }
 
     const finalPrompt = systemPrompt ? `${systemPrompt}\n${prompt}` : prompt;
+
+    logEntry.promptToQwen = {
+      systemPromptLength: systemPrompt.length,
+      totalLength: finalPrompt.length,
+      preview: (systemPrompt.length > 500 ? systemPrompt.substring(0, 500) + '...' : systemPrompt) + '\n\n' + 
+               (prompt.length > 200 ? prompt.substring(0, 200) + '...' : prompt),
+    };
 
     if (process.env.DEBUG) {
       logDebug('PROMPT TO QWEN', {
@@ -407,6 +426,9 @@ export async function chatCompletions(c: Context) {
               if (isThinkingChunk) {
                 reasoningBuffer += vStr;
               } else {
+                if (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"')) {
+                  logStore.addRawChunk(logId, vStr);
+                }
                 if (process.env.DEBUG && (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"'))) {
                   logDebug('QWEN RAW CHUNK (non-streaming)', vStr);
                 }
@@ -419,6 +441,9 @@ export async function chatCompletions(c: Context) {
                       name: tc.name,
                       arguments: JSON.stringify(tc.arguments)
                     }
+                  });
+                  logStore.updateEntry(logId, entry => {
+                    entry.parsedToolCalls.push({ name: tc.name, args: JSON.stringify(tc.arguments) });
                   });
                   if (process.env.DEBUG) {
                     logDebug('PARSED TOOL CALL', { name: tc.name, arguments: tc.arguments });
@@ -463,6 +488,15 @@ export async function chatCompletions(c: Context) {
         if (reasoningBuffer) message.reasoning_content = reasoningBuffer;
       if (toolCallsOut.length) toolCallsOut.forEach((tc, idx) => tc.index = idx);
       if (toolCallsOut.length) message.tool_calls = toolCallsOut;
+
+      logStore.updateEntry(logId, entry => {
+        entry.finalResponse = {
+          finishReason: toolCallsOut.length ? 'tool_calls' : 'stop',
+          toolCallCount: toolCallsOut.length,
+          contentPreview: lastFullContent.length > 500 ? lastFullContent.substring(0, 500) + '...' : lastFullContent,
+        };
+        entry.remainingText = lastFullContent.length > 500 ? lastFullContent.substring(0, 500) + '...' : lastFullContent;
+      });
 
       if (process.env.DEBUG) {
         logDebug('OUTGOING RESPONSE', {
@@ -628,11 +662,21 @@ export async function chatCompletions(c: Context) {
                 });
               } else {
                 inThinkingState = false;
+                if (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"')) {
+                  logStore.addRawChunk(logId, vStr);
+                }
                 if (process.env.DEBUG && (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"'))) {
                   logDebug('QWEN RAW CHUNK (streaming)', vStr);
                 }
                 const { text, toolCalls } = toolParser.feed(vStr);
 
+                if (toolCalls.length) {
+                  logStore.updateEntry(logId, entry => {
+                    for (const tc of toolCalls) {
+                      entry.parsedToolCalls.push({ name: tc.name, args: JSON.stringify(tc.arguments) });
+                    }
+                  });
+                }
                 if (toolCalls.length && process.env.DEBUG) {
                   logDebug('PARSED TOOL CALLS (streaming)', toolCalls.map(tc => ({ name: tc.name, arguments: tc.arguments })));
                 }
@@ -768,6 +812,7 @@ export async function chatCompletions(c: Context) {
     });
   } catch (err: any) {
     console.error('Error in chatCompletions:', err);
+    logStore.addError(logId, err.message || String(err));
     const status = err.upstreamStatus || 500;
     return c.json({ error: { message: err.message } }, status);
   }

@@ -10,3 +10,7 @@ coverage/
 .kilo
 qwen_profile/
 .obsidian-vault/.obsidian-vault/
+.omo
+.obsidian-vault
+.agent-screenshots
+TODO.md
