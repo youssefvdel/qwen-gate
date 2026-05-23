@@ -197,7 +197,12 @@ function normalizeToolCalls(toolCalls: ParsedToolCall[]): { fixed: ParsedToolCal
     try {
       let args = tc.arguments;
       if (typeof args === 'string') {
-        try { args = JSON.parse(args); } catch { continue; }
+        const argStr: string = args;
+        try { args = JSON.parse(argStr); } catch {
+          const repaired = repairJson(argStr);
+          if (repaired) try { args = JSON.parse(repaired); } catch { continue; }
+          else continue;
+        }
       }
       if (typeof args !== 'object' || Array.isArray(args) || !args) continue;
       const name = tc.name?.trim() || '';
@@ -206,6 +211,23 @@ function normalizeToolCalls(toolCalls: ParsedToolCall[]): { fixed: ParsedToolCal
     } catch { continue; }
   }
   return { fixed };
+}
+
+function repairJson(raw: string): string | null {
+  if (!raw || raw.trim().length < 2) return null;
+  let s = raw.trim();
+  s = s.replace(/,\s*([}\]])/g, '$1');
+  const openCurly = (s.match(/{/g) || []).length;
+  const closeCurly = (s.match(/}/g) || []).length;
+  const openBracket = (s.match(/\[/g) || []).length;
+  const closeBracket = (s.match(/\]/g) || []).length;
+  if (openCurly > closeCurly) s += '}'.repeat(openCurly - closeCurly);
+  if (openBracket > closeBracket) s += ']'.repeat(openBracket - closeBracket);
+  if (closeCurly > openCurly) {
+    let excess = closeCurly - openCurly;
+    while (excess > 0 && s.endsWith('}')) { s = s.slice(0, -1); excess--; }
+  }
+  return s !== raw.trim() ? s : null;
 }
 
 export async function runExecutionLoop(
@@ -218,6 +240,7 @@ export async function runExecutionLoop(
   const debug = config.debug ?? false;
   let consecutiveGuardFailures = 0;
   let lastGuardErrors = '';
+  const toolCallWindow: string[] = [];
 
   const tools = registry.listNames().length > 0
     ? registry.toOpenAITools()
@@ -302,6 +325,24 @@ export async function runExecutionLoop(
       continue;
     }
     consecutiveGuardFailures = 0;
+
+    for (const tc of guardResult.valid) {
+      const key = `${tc.name}|${JSON.stringify(tc.arguments, Object.keys(tc.arguments || {}).sort())}`;
+      toolCallWindow.push(key);
+    }
+    if (toolCallWindow.length > 25) toolCallWindow.splice(0, toolCallWindow.length - 25);
+
+    for (const tc of guardResult.valid) {
+      const key = `${tc.name}|${JSON.stringify(tc.arguments, Object.keys(tc.arguments || {}).sort())}`;
+      if (toolCallWindow.filter(k => k === key).length >= 4) {
+        messages.push({
+          role: 'system',
+          content: `LOOP DETECTED: You have called "${tc.name}" with the same arguments 4+ times. You are stuck. Provide your FINAL answer now — do NOT call any more tools.`,
+        });
+        if (debug) console.log(`[executor] Loop detected: ${key}`);
+        break;
+      }
+    }
 
     const context: ToolContext = {
       messages,
