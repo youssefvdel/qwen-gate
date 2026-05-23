@@ -11,6 +11,7 @@ import type { ParsedToolCall } from './types.ts';
 export interface ParserResult {
   text: string;
   toolCalls: ParsedToolCall[];
+  thinking: string;
 }
 
 export class StreamingToolParser {
@@ -21,27 +22,24 @@ export class StreamingToolParser {
   private emittedToolCallCount = 0;
   private chunksSinceTagChange = 0;
 
-  // When true, feed() returns raw text without any tool call parsing
-  // Controlled by TOOL_CALLING=false env var.
+  private insideThinking = false;
+  private thinkEndTag: string = '';
+  private thinkBuffer = '';
+  private readonly THINK_TAGS: Array<{ start: string; end: string }> = [
+    { start: '<think>', end: '</think>' },
+    { start: '<thinking>', end: '</thinking>' },
+  ];
+
   public passThrough = false;
-
-  // When false, skip safety pre-processing (backtick stripping) before parsing.
-  // Only applies when passThrough is false. Controlled by CLEAN_OUTPUT env var.
   public skipPreProcess = false;
-
-  // Recent flushed text buffer — enables cross-chunk orphaned tool call detection.
-  // When JSON arrives in one chunk and </tool_call> in the next, the orphan
-  // extraction searches this buffer for JSON to pair with the closer.
+  public bufferToolCalls = false;
+  private textBuffer = '';
   private recentText = '';
   private readonly MAX_RECENT = 4000;
-
-  // Max buffer size (100KB) to prevent OOM on long streams without tool calls
   private readonly MAX_BUFFER_SIZE = 100_000;
+  private readonly MAX_CHUNKS_INSIDE_TOOL = 5000;
+  private readonly INSIDE_TOOL_CONTENT_LIMIT = 200_000;
 
-  // Max chunks stuck in insideTool state before auto-reset
-  private readonly MAX_CHUNKS_INSIDE_TOOL = 50;
-
-  // Pre-compiled regex patterns (avoid re-creating on every feed())
   private readonly RE_BACKTICK_BEFORE_OPEN = /```(?:json|JSON)?\s*\n?(?=<tool_call>)/g;
   private readonly RE_BACKTICK_AFTER_CLOSE = /(?<=<\/tool_call>)\n?\s*```/g;
   private readonly RE_MARKDOWN_FENCE_OPEN = /^```(?:json)?\s*/gm;
@@ -50,52 +48,59 @@ export class StreamingToolParser {
   feed(chunk: string): ParserResult {
     if (this.passThrough) {
       this.buffer += chunk;
-      return { text: chunk, toolCalls: [] };
+      return { text: chunk, toolCalls: [], thinking: '' };
     }
-    // Safety pre-processing: strip backtick fences around tool_call tags.
-    // Skipped when skipPreProcess=true (CLEAN_OUTPUT=false).
     if (!this.skipPreProcess) {
       chunk = chunk.replace(this.RE_BACKTICK_BEFORE_OPEN, '');
       chunk = chunk.replace(this.RE_BACKTICK_AFTER_CLOSE, '');
     }
     this.buffer += chunk;
 
-    // Enforce max buffer size — truncate oldest data if exceeded
     if (this.buffer.length > this.MAX_BUFFER_SIZE) {
       this.buffer = this.buffer.slice(-this.MAX_BUFFER_SIZE);
     }
 
-    const result: ParserResult = { text: '', toolCalls: [] };
+    const result: ParserResult = { text: '', toolCalls: [], thinking: '' };
 
-    // Step 1: Extract any orphaned tool calls first (model outputs JSON without
-    // opening <tool_call> tag). This must run before the tag-based loop below.
-    const preExtractLen = this.buffer.length;
-    this.buffer = this.extractOrphanedToolCalls(this.buffer, result);
-    // If orphan extraction consumed content (found tool calls), reset insideTool.
-    // The remaining buffer is plain text after extraction.
-    if (this.buffer.length < preExtractLen) {
-      this.insideTool = false;
+    if (!this.insideTool) {
+      this.extractThinking(result);
     }
-    // Otherwise, keep insideTool intact — the opening tag is still waiting
-    // for its closing tag from a future chunk.
 
-    // Step 2: Normal tag-based parsing for remaining buffer
+    if (!this.insideTool) {
+      const preExtractLen = this.buffer.length;
+      this.buffer = this.extractOrphanedToolCalls(this.buffer, result);
+      if (this.buffer.length < preExtractLen) {
+        this.insideTool = false;
+        if (this.bufferToolCalls) {
+          this.emitBufferedText(result);
+        }
+      }
+    }
+
     while (this.buffer.length > 0) {
       if (!this.insideTool) {
         this.chunksSinceTagChange = 0;
         const startIdx = this.buffer.indexOf(this.TOOL_START);
         if (startIdx !== -1) {
-          result.text += this.buffer.substring(0, startIdx);
+          const beforeTag = this.buffer.substring(0, startIdx);
+          if (this.bufferToolCalls) {
+            this.textBuffer += beforeTag;
+          } else {
+            result.text += beforeTag;
+          }
           this.buffer = this.buffer.substring(startIdx + this.TOOL_START.length);
           this.insideTool = true;
         } else {
-          // Check for partial opening tag before flushing
-          const partialLength = this.getPartialTagLength();
-          const flushLen = this.buffer.length - partialLength;
+          const partialTagLen = Math.max(
+            this.getPartialTagLength(),
+            this.getPartialCloserLength(this.buffer),
+            this.getPartialThinkStartLength(this.buffer),
+            this.insideThinking ? this.getPartialThinkEndLength(this.buffer, this.thinkEndTag) : 0
+          );
+          const flushLen = this.buffer.length - partialTagLen;
           if (flushLen > 0) {
             const flushed = this.buffer.substring(0, flushLen);
             result.text += flushed;
-            // Save flushed text for cross-chunk orphan detection
             this.recentText = (this.recentText + flushed).slice(-this.MAX_RECENT);
             this.buffer = this.buffer.substring(flushLen);
           }
@@ -103,9 +108,16 @@ export class StreamingToolParser {
         }
       } else {
         this.chunksSinceTagChange++;
-        // Auto-reset if stuck insideTool for too many chunks (model forgot closing tag).
-        // Flush accumulated buffer as text and exit tool mode to avoid infinite cycles.
         if (this.chunksSinceTagChange > this.MAX_CHUNKS_INSIDE_TOOL) {
+          this.emitBufferedText(result);
+          result.text += this.TOOL_START + this.buffer;
+          this.buffer = '';
+          this.insideTool = false;
+          this.chunksSinceTagChange = 0;
+          break;
+        }
+        if (this.buffer.length > this.INSIDE_TOOL_CONTENT_LIMIT) {
+          this.emitBufferedText(result);
           result.text += this.TOOL_START + this.buffer;
           this.buffer = '';
           this.insideTool = false;
@@ -117,6 +129,9 @@ export class StreamingToolParser {
           this.chunksSinceTagChange = 0;
           const content = this.buffer.substring(0, endIdx);
           this.buffer = this.buffer.substring(endIdx + this.TOOL_END.length);
+          if (this.bufferToolCalls) {
+            this.emitBufferedText(result);
+          }
           this.processToolContent(content, result);
           this.insideTool = false;
         } else {
@@ -128,34 +143,83 @@ export class StreamingToolParser {
     return result;
   }
 
+  private emitBufferedText(result: ParserResult): void {
+    if (this.textBuffer) {
+      result.text = this.textBuffer + result.text;
+      this.textBuffer = '';
+    }
+  }
+
   flush(): ParserResult {
-    const result: ParserResult = { text: '', toolCalls: [] };
+    const result: ParserResult = { text: '', toolCalls: [], thinking: '' };
     if (this.passThrough) {
       result.text = this.buffer;
       this.buffer = '';
       return result;
     }
-    if (!this.buffer) return result;
 
-    // Strip backtick fences as in feed()
+    if (this.insideThinking) {
+      if (this.thinkBuffer || this.buffer) {
+        result.thinking = this.thinkBuffer + this.buffer;
+      }
+      this.thinkBuffer = '';
+      this.buffer = '';
+      this.insideThinking = false;
+      this.thinkEndTag = '';
+    }
+
+    if (!this.buffer) {
+      if (this.bufferToolCalls && this.textBuffer) {
+        result.text = this.textBuffer;
+        this.textBuffer = '';
+      }
+      this.insideThinking = false;
+      this.thinkEndTag = '';
+      this.thinkBuffer = '';
+      return result;
+    }
+
     this.buffer = this.buffer.replace(this.RE_BACKTICK_BEFORE_OPEN, '');
     this.buffer = this.buffer.replace(this.RE_BACKTICK_AFTER_CLOSE, '');
 
+    this.extractThinking(result);
+
     if (this.insideTool) {
+      if (this.bufferToolCalls) {
+        this.emitBufferedText(result);
+      }
       this.processToolContent(this.buffer, result);
     } else {
       const remaining = this.extractOrphanedToolCalls(this.buffer, result);
       if (remaining !== this.buffer) {
-        if (remaining) result.text += remaining;
+        if (remaining) {
+          if (this.bufferToolCalls) {
+            this.textBuffer += remaining;
+          } else {
+            result.text += remaining;
+          }
+        }
       } else {
-        result.text += this.buffer;
+        if (this.bufferToolCalls) {
+          this.textBuffer += this.buffer;
+        } else {
+          result.text += this.buffer;
+        }
       }
+    }
+
+    if (this.bufferToolCalls && this.textBuffer) {
+      result.text = this.textBuffer + result.text;
+      this.textBuffer = '';
     }
 
     this.buffer = '';
     this.insideTool = false;
     this.chunksSinceTagChange = 0;
     this.recentText = '';
+    this.insideThinking = false;
+    this.thinkEndTag = '';
+    this.thinkBuffer = '';
     return result;
   }
 
@@ -167,12 +231,76 @@ export class StreamingToolParser {
     return this.insideTool;
   }
 
+  private extractThinking(result: ParserResult): void {
+    while (this.buffer.length > 0) {
+      if (this.insideThinking) {
+        const endIdx = this.buffer.indexOf(this.thinkEndTag);
+        if (endIdx !== -1) {
+          this.thinkBuffer += this.buffer.substring(0, endIdx);
+          this.buffer = this.buffer.substring(endIdx + this.thinkEndTag.length);
+          result.thinking += this.thinkBuffer;
+          this.thinkBuffer = '';
+          this.insideThinking = false;
+          this.thinkEndTag = '';
+        } else {
+          const partialLen = this.getPartialThinkEndLength(this.buffer, this.thinkEndTag);
+          const safeLen = this.buffer.length - partialLen;
+          if (safeLen > 0) {
+            this.thinkBuffer += this.buffer.substring(0, safeLen);
+            this.buffer = this.buffer.substring(safeLen);
+          }
+          break;
+        }
+      } else {
+        const match = this.findThinkStart(this.buffer);
+        if (match.index !== -1) {
+          this.buffer = this.buffer.substring(0, match.index) + this.buffer.substring(match.index + match.tag.length);
+          this.insideThinking = true;
+          this.thinkEndTag = match.endTag;
+        } else {
+          break;
+        }
+      }
+    }
+  }
+
+  private findThinkStart(buf: string): { index: number; tag: string; endTag: string } {
+    let best = { index: -1, tag: '', endTag: '' };
+    for (const t of this.THINK_TAGS) {
+      const idx = buf.indexOf(t.start);
+      if (idx !== -1 && (best.index === -1 || idx < best.index)) {
+        best = { index: idx, tag: t.start, endTag: t.end };
+      }
+    }
+    return best;
+  }
+
+  private getPartialThinkStartLength(buf: string): number {
+    let maxLen = 0;
+    for (const t of this.THINK_TAGS) {
+      for (let i = 1; i < t.start.length; i++) {
+        if (buf.endsWith(t.start.substring(0, i))) {
+          maxLen = Math.max(maxLen, i);
+        }
+      }
+    }
+    return maxLen;
+  }
+
+  private getPartialThinkEndLength(buf: string, endTag: string): number {
+    if (!endTag) return 0;
+    for (let i = 1; i < endTag.length; i++) {
+      if (buf.endsWith(endTag.substring(0, i))) {
+        return i;
+      }
+    }
+    return 0;
+  }
+
   private processToolContent(content: string, result: ParserResult): void {
     let t = content.trim();
     if (!t) return;
 
-    // Strip markdown code blocks if the model wraps JSON in ```json ... ```
-    // This happens when the model doesn't follow instructions perfectly.
     if (t.startsWith('`') || t.startsWith('```')) {
       t = t.replace(/^```(?:json)?\s*/gm, '').replace(/```\s*$/gm, '').trim();
     }
@@ -215,10 +343,10 @@ export class StreamingToolParser {
 
   private parseToolCall(parsed: any): ParsedToolCall | null {
     if (!parsed || typeof parsed !== 'object') return null;
-    
+
     const name = parsed.name || parsed.function?.name;
     if (!name || typeof name !== 'string') return null;
-    
+
     let args = parsed.arguments || parsed.function?.arguments || {};
     if (typeof args === 'string') {
       try { args = JSON.parse(args); }
@@ -242,57 +370,39 @@ export class StreamingToolParser {
     return 0;
   }
 
-  /**
-   * Iteratively extract all orphaned tool calls from the buffer.
-   *
-   * Model sometimes outputs JSON without an opening <tool_call> tag:
-   *   {"name":"grep","arguments":{}}
-   *   </tool_call>
-   *
-   * This scans for </tool_call>, extracts JSON before it, and if it's a valid
-   * tool call (has name + arguments), adds it to result. Repeats until no more
-   * orphaned closers are found. Also handles </tool_call> split across chunks
-   * by checking for partial closing tags.
-   *
-   * Returns remaining text after extraction.
-   */
   private extractOrphanedToolCalls(buf: string, result: ParserResult): string {
     let cursor = 0;
     while (cursor < buf.length) {
-      // Look for a full </tool_call> or a partial one at the buffer boundary
       const fullCloserIdx = buf.indexOf(this.TOOL_END, cursor);
-      const partialLen = this.getPartialCloserLength(buf);
-
       let closerIdx = fullCloserIdx;
       let closerLen = this.TOOL_END.length;
+      let isPartial = false;
 
-      // If no full closer but there's a partial one at the end, treat it as orphaned
-      if (fullCloserIdx === -1 && partialLen > 0) {
-        closerIdx = buf.length - partialLen;
-        closerLen = partialLen;
-        // Partial closer means the rest of </tool_call> is in the next chunk.
-        // We try to parse what we have before the partial.
+      if (fullCloserIdx === -1) {
+        const partialLen = this.getPartialCloserLength(buf);
+        if (partialLen > 0) {
+          closerIdx = buf.length - partialLen;
+          closerLen = this.TOOL_END.length;
+          isPartial = true;
+        }
       }
 
       if (closerIdx === -1) break;
 
       const beforeCloser = buf.substring(cursor, closerIdx);
-      const afterCloser = buf.substring(closerIdx + closerLen);
+      const afterCloser = isPartial
+        ? buf.substring(closerIdx)
+        : buf.substring(closerIdx + closerLen);
 
-      // Skip if there's a matching opening tag before this closer (not orphaned).
-      // Don't break — there might be orphaned calls later in the buffer.
       if (beforeCloser.includes(this.TOOL_START)) {
         cursor = closerIdx + closerLen;
         continue;
       }
 
-      // Find a JSON object/array start before the </tool_call>.
-      // If none found, check recentText (JSON might be from a previous chunk).
       let jsonStart = beforeCloser.search(/[\[{]/);
       if (jsonStart === -1 && this.recentText) {
         const recentJson = this.recentText.search(/[\[{]/);
         if (recentJson !== -1) {
-          // Try to parse the JSON from recentText as a tool call
           const jsonStr = this.recentText.substring(recentJson);
           try {
             const parsed = robustParseJSON(jsonStr);
@@ -301,7 +411,6 @@ export class StreamingToolParser {
               if (tc) {
                 result.toolCalls.push(tc);
                 this.emittedToolCallCount++;
-                // Remove the JSON from recentText
                 this.recentText = this.recentText.substring(0, recentJson);
                 cursor = closerIdx + closerLen;
                 continue;
@@ -313,33 +422,45 @@ export class StreamingToolParser {
         continue;
       }
 
+      if (jsonStart === -1) {
+        if (isPartial) break;
+        cursor = closerIdx + 1;
+        continue;
+      }
+
       const jsonStr = beforeCloser.substring(jsonStart);
 
       try {
         const parsed = robustParseJSON(jsonStr);
         if (!parsed || typeof parsed !== 'object') {
+          if (isPartial) break;
           cursor = closerIdx + 1;
           continue;
         }
 
         const tc = this.parseToolCall(parsed);
         if (!tc) {
+          if (isPartial) break;
           cursor = closerIdx + 1;
           continue;
         }
 
-        // Valid tool call — emit it
         const textBeforeJson = beforeCloser.substring(0, jsonStart);
         if (textBeforeJson) result.text += textBeforeJson;
 
         result.toolCalls.push(tc);
         this.emittedToolCallCount++;
 
-        // Move past this closer and keep scanning
+        if (isPartial) {
+          buf = afterCloser;
+          break;
+        }
+
         cursor = 0;
         buf = afterCloser;
         continue;
       } catch {
+        if (isPartial) break;
         cursor = closerIdx + 1;
         continue;
       }
@@ -348,10 +469,6 @@ export class StreamingToolParser {
     return buf;
   }
 
-  /**
-   * Check if the buffer ends with a partial </tool_call> tag (e.g. </tool_cal)
-   * so orphan detection can handle it even when split across chunks.
-   */
   private getPartialCloserLength(buf: string): number {
     for (let i = 1; i < this.TOOL_END.length; i++) {
       if (buf.endsWith(this.TOOL_END.substring(0, i))) {

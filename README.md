@@ -23,37 +23,37 @@ cp .env.example .env
 npm start
 ```
 
-The proxy starts on `http://localhost:3000`.
+The proxy starts on `http://localhost:26405`.
 
 ## Usage
 
 ```bash
 # List models
-curl http://localhost:3000/v1/models
+curl http://localhost:26405/v1/models
 
 # Chat (non-streaming)
-curl -X POST http://localhost:3000/v1/chat/completions \
+curl -X POST http://localhost:26405/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model": "qwen3.6-plus-no-thinking", "messages": [{"role": "user", "content": "hello"}]}'
 
 # Streaming
-curl -N -X POST http://localhost:3000/v1/chat/completions \
+curl -N -X POST http://localhost:26405/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model": "qwen3.6-plus-no-thinking", "messages": [{"role": "user", "content": "hello"}], "stream": true}'
 
 # Health
-curl http://localhost:3000/health
+curl http://localhost:26405/health
 ```
 
 ## Environment
 
-| Variable | Default | Description |
-|---|---|---|
-| `PORT` | `3000` | Server port |
-| `API_KEY` | — | Optional auth key |
-| `QWEN_EMAIL` | — | Qwen account email |
-| `QWEN_PASSWORD` | — | Qwen account password |
-| `BROWSER` | `chromium` | Playwright browser engine |
+| Variable        | Default    | Description               |
+| --------------- | ---------- | ------------------------- |
+| `PORT`          | `26405`    | Server port               |
+| `API_KEY`       | —          | Optional auth key         |
+| `QWEN_EMAIL`    | —          | Qwen account email        |
+| `QWEN_PASSWORD` | —          | Qwen account password     |
+| `BROWSER`       | `chromium` | Playwright browser engine |
 
 ## Models
 

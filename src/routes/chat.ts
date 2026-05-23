@@ -7,6 +7,7 @@ import { registry } from '../tools/registry.ts';
 import type { FunctionToolDefinition } from '../tools/types.ts';
 import { robustParseJSON } from '../utils/json.ts';
 import { StreamingToolParser } from '../tools/parser.ts';
+import { validateSingleToolCall } from '../tools/guard.ts';
 import { RetryableQwenStreamError } from '../services/qwen.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import modelSpecs from '../models.json' with { type: 'json' };
@@ -353,7 +354,10 @@ export async function chatCompletions(c: Context) {
       const toolParser = new StreamingToolParser();
       if (!toolCalling) toolParser.passThrough = true;
       if (!cleanOutput) toolParser.skipPreProcess = true;
+      toolParser.bufferToolCalls = true;
       const toolCallsOut: any[] = [];
+      const correctionPrompts: string[] = []; // Guard rejection messages for logging
+
       let buffer = '';
       let completionTokens = 0;
       let promptTokens = Math.ceil(finalPrompt.length / 3.5);
@@ -427,9 +431,6 @@ export async function chatCompletions(c: Context) {
               if (isThinkingChunk) {
                 reasoningBuffer += vStr;
               } else {
-                if (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"')) {
-                  logStore.addRawChunk(logId, vStr);
-                }
                 if (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"') || vStr.includes('{')) {
                   logStore.addRawChunk(logId, vStr);
                   logStore.updateEntry(logId, entry => { entry.rawFullContent += vStr; });
@@ -437,8 +438,23 @@ export async function chatCompletions(c: Context) {
                 if (process.env.DEBUG && (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"'))) {
                   logDebug('QWEN RAW CHUNK (non-streaming)', vStr);
                 }
-                const { toolCalls } = toolParser.feed(vStr);
+                const { toolCalls, thinking } = toolParser.feed(vStr);
+                // Accumulate thinking content from inline <think> tags
+                if (thinking) {
+                  reasoningBuffer += thinking;
+                }
                 for (const tc of toolCalls) {
+                  // Guard: validate tool call before sending to client
+                  const guard = validateSingleToolCall(tc);
+                  if (!guard.ok) {
+                    console.warn(`[Guard] REJECTED tool call "${tc.name}":`, guard.errors);
+                    logStore.updateEntry(logId, entry => {
+                      entry.errors.push(`Guard rejected tool call "${tc.name}": ${guard.errors.join(', ')}`);
+                    });
+                    // Store correction prompt for next turn
+                    correctionPrompts.push(guard.correctionPrompt);
+                    continue; // Skip — don't send to client
+                  }
                   toolCallsOut.push({
                     id: tc.id,
                     type: 'function',
@@ -468,11 +484,24 @@ export async function chatCompletions(c: Context) {
         return c.json({ error: { message: upstreamError.message } }, upstreamError.status as any);
       }
 
-      const { text: remainingText, toolCalls: remainingToolCalls } = toolParser.flush();
+      const { text: remainingText, toolCalls: remainingToolCalls, thinking: remainingThinking } = toolParser.flush();
       if (remainingText) {
         lastFullContent += remainingText;
       }
+      if (remainingThinking) {
+        reasoningBuffer += remainingThinking;
+      }
       for (const tc of remainingToolCalls) {
+        // Guard: validate tool call before sending to client
+        const guard = validateSingleToolCall(tc);
+        if (!guard.ok) {
+          console.warn(`[Guard] REJECTED flush tool call "${tc.name}":`, guard.errors);
+          logStore.updateEntry(logId, entry => {
+            entry.errors.push(`Guard rejected flush tool call "${tc.name}": ${guard.errors.join(', ')}`);
+          });
+          correctionPrompts.push(guard.correctionPrompt);
+          continue;
+        }
         toolCallsOut.push({
           id: tc.id,
           type: 'function',
@@ -489,7 +518,9 @@ export async function chatCompletions(c: Context) {
         total_tokens: promptTokens + completionTokens,
         prompt_tokens_details: { cached_tokens: 0 }
       };
-      const message: any = { role: 'assistant', content: toolCallsOut.length ? null : lastFullContent };
+      const cleanedContent = lastFullContent
+        .replace(/<\/?(?:think|thinking)>/gi, '').trim();
+      const message: any = { role: 'assistant', content: toolCallsOut.length ? null : cleanedContent };
         if (reasoningBuffer) message.reasoning_content = reasoningBuffer;
       if (toolCallsOut.length) toolCallsOut.forEach((tc, idx) => tc.index = idx);
       if (toolCallsOut.length) message.tool_calls = toolCallsOut;
@@ -582,6 +613,7 @@ export async function chatCompletions(c: Context) {
       const toolParser = new StreamingToolParser();
       if (!toolCalling) toolParser.passThrough = true;
       if (!cleanOutput) toolParser.skipPreProcess = true;
+      toolParser.bufferToolCalls = true;
 
       let buffer = '';
       let completionTokens = 0;
@@ -676,7 +708,7 @@ export async function chatCompletions(c: Context) {
                 if (process.env.DEBUG && (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"'))) {
                   logDebug('QWEN RAW CHUNK (streaming)', vStr);
                 }
-                const { text, toolCalls } = toolParser.feed(vStr);
+                const { text, toolCalls, thinking } = toolParser.feed(vStr);
 
                 if (toolCalls.length) {
                   logStore.updateEntry(logId, entry => {
@@ -689,7 +721,22 @@ export async function chatCompletions(c: Context) {
                   logDebug('PARSED TOOL CALLS (streaming)', toolCalls.map(tc => ({ name: tc.name, arguments: tc.arguments })));
                 }
 
-                if (text) {
+                // Emit thinking content as reasoning_content (stripped from regular text)
+                if (thinking) {
+                  await writeEvent({
+                    id: completionId,
+                    object: 'chat.completion.chunk',
+                    created: Math.floor(Date.now() / 1000),
+                    model: body.model,
+                    choices: [makeChoice({ reasoning_content: thinking })]
+                  });
+                }
+
+                // Hold text when tool calls are present — validate first.
+                // If any tool call fails guard, suppress the text too so it doesn't
+                // pollute the client context and teach the model wrong formats.
+                const pendingText = (toolCalls.length > 0 && text) ? text : null;
+                if (text && !pendingText) {
                   await writeEvent({
                     id: completionId,
                     object: 'chat.completion.chunk',
@@ -699,7 +746,18 @@ export async function chatCompletions(c: Context) {
                   });
                 }
 
+                let allToolCallsValid = true;
                 for (const tc of toolCalls) {
+                  // Guard: validate tool call before emitting to client
+                  const guard = validateSingleToolCall(tc);
+                  if (!guard.ok) {
+                    allToolCallsValid = false;
+                    console.warn(`[Guard] REJECTED streaming tool call "${tc.name}":`, guard.errors);
+                    logStore.updateEntry(logId, entry => {
+                      entry.errors.push(`Guard rejected streaming tool call "${tc.name}": ${guard.errors.join(', ')}`);
+                    });
+                    continue; // Skip — don't send malformed tool call to client
+                  }
                   await writeEvent({
                     id: completionId,
                     object: 'chat.completion.chunk',
@@ -716,6 +774,18 @@ export async function chatCompletions(c: Context) {
                         }
                       }]
                     })]
+                  });
+                }
+
+                // Only send text if all tool calls passed guard validation.
+                // If any failed, suppress the text to prevent polluting client context.
+                if (pendingText && allToolCallsValid) {
+                  await writeEvent({
+                    id: completionId,
+                    object: 'chat.completion.chunk',
+                    created: Math.floor(Date.now() / 1000),
+                    model: body.model,
+                    choices: [makeChoice({ content: pendingText })]
                   });
                 }
               }
@@ -747,11 +817,20 @@ export async function chatCompletions(c: Context) {
       }
 
       // Flush tool parser
-      const { text: remainingText, toolCalls: remainingToolCalls } = toolParser.flush();
+      const { text: remainingText, toolCalls: remainingToolCalls, thinking: remainingThinking } = toolParser.flush();
       if (process.env.DEBUG) {
         if (remainingText) logDebug('STREAMING FLUSH TEXT', remainingText.length > 500 ? remainingText.substring(0, 500) : remainingText);
         if (remainingToolCalls.length) logDebug('STREAMING FLUSH TOOL CALLS', remainingToolCalls.map(tc => ({ name: tc.name, arguments: tc.arguments })));
         logDebug('STREAMING FINISH REASON', toolParser.getEmittedToolCallCount() > 0 ? 'tool_calls' : 'stop');
+      }
+      if (remainingThinking) {
+        await writeEvent({
+          id: completionId,
+          object: 'chat.completion.chunk',
+          created: Math.floor(Date.now() / 1000),
+          model: body.model,
+          choices: [makeChoice({ reasoning_content: remainingThinking })]
+        });
       }
       if (remainingText) {
         await writeEvent({
@@ -763,6 +842,15 @@ export async function chatCompletions(c: Context) {
         });
       }
       for (const tc of remainingToolCalls) {
+        // Guard: validate tool call before emitting to client
+        const guard = validateSingleToolCall(tc);
+        if (!guard.ok) {
+          console.warn(`[Guard] REJECTED streaming flush tool call "${tc.name}":`, guard.errors);
+          logStore.updateEntry(logId, entry => {
+            entry.errors.push(`Guard rejected streaming flush tool call "${tc.name}": ${guard.errors.join(', ')}`);
+          });
+          continue;
+        }
         await writeEvent({
           id: completionId,
           object: 'chat.completion.chunk',

@@ -4,6 +4,53 @@
  * Robust JSON parsing utilities
  */
 
+/**
+ * Remove trailing commas before } or ] in JSON strings.
+ * LLMs often produce: {"items": ["a", "b",]} or {"a": 1,}
+ * This is string-aware — it won't modify commas inside quoted values.
+ */
+function removeTrailingCommas(json: string): string {
+  let result = '';
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < json.length; i++) {
+    const char = json[i];
+
+    if (escaped) {
+      result += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      result += char;
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      result += char;
+      continue;
+    }
+
+    if (!inString && char === ',') {
+      // Look ahead past whitespace to see if next non-whitespace is } or ]
+      let j = i + 1;
+      while (j < json.length && /\s/.test(json[j])) j++;
+      if (j < json.length && (json[j] === '}' || json[j] === ']')) {
+        // Skip this trailing comma
+        continue;
+      }
+    }
+
+    result += char;
+  }
+
+  return result;
+}
+
 export function robustParseJSON(str: string): any {
   const trimmed = str.trim();
 
@@ -33,6 +80,9 @@ export function robustParseJSON(str: string): any {
   // 0. Fix unquoted property names (e.g., arguments instead of "arguments")
   // We apply this to jsonPart and use the result for subsequent fixes
   let currentJson = jsonPart.replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)(\s*:)/g, '$1"$2"$3');
+
+  // 0b. Fix trailing commas inside arrays/objects (e.g., [a, b,] -> [a, b])
+  currentJson = removeTrailingCommas(currentJson);
 
   // 0. Fix common LLM hallucinations
   // Fix double key names like {"name": "name": "tool"} -> {"name": "tool"}

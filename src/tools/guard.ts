@@ -93,3 +93,39 @@ export function validateToolCalls(
     ok: errors.length === 0,
   };
 }
+
+/**
+ * Validate a single parsed tool call.
+ * Returns { ok: true } if valid, or { ok: false, errors: [...], correctionPrompt } if not.
+ * Used in streaming/non-streaming paths to gate each tool call before emitting to client.
+ */
+export function validateSingleToolCall(tc: ParsedToolCall): GuardResult {
+  const errors: string[] = [];
+
+  if (!tc.name || typeof tc.name !== 'string' || tc.name.trim() === '') {
+    errors.push(`Tool call missing or empty "name" field.`);
+  }
+
+  if (!tc.arguments || typeof tc.arguments !== 'object' || Array.isArray(tc.arguments)) {
+    errors.push(`Tool call "${tc.name || 'unknown'}" has invalid "arguments". Must be a JSON object, not a string or array.`);
+  } else if (Object.keys(tc.arguments).length === 0) {
+    // Empty arguments is a warning but not a rejection — some tools legitimately take no args
+    // We allow it but could add stricter validation per-tool in the future
+  }
+
+  let correctionPrompt = '';
+  if (errors.length > 0) {
+    correctionPrompt = `[SYSTEM: Tool call format error] A tool call was rejected:\n`;
+    for (const err of errors) {
+      correctionPrompt += `- ${err}\n`;
+    }
+    correctionPrompt += `Please fix the format and retry. Use <tool_call> tags with raw JSON inside.`;
+  }
+
+  return {
+    valid: errors.length === 0 ? [tc] : [],
+    errors,
+    correctionPrompt,
+    ok: errors.length === 0,
+  };
+}
