@@ -151,8 +151,11 @@ export async function chatCompletions(c: Context) {
     let isStream = body.stream ?? false;
     if (process.env.STREAMING === 'true') isStream = true;
     else if (process.env.STREAMING === 'false') isStream = false;
-    // CLEAN_OUTPUT=false skips tool call parsing — raw Qwen output passes through
-    const cleanOutput = process.env.CLEAN_OUTPUT !== 'false';
+    // TOOL_CALLING=false disables all tool call parsing — raw Qwen output passes through
+    const toolCalling = process.env.TOOL_CALLING !== 'false';
+    // CLEAN_OUTPUT=false skips safety pre-processing (backtick stripping) before parsing.
+    // Only applies when TOOL_CALLING=true.
+    const cleanOutput = toolCalling && process.env.CLEAN_OUTPUT !== 'false';
     
     const messages = body.messages || [];
 
@@ -357,7 +360,8 @@ export async function chatCompletions(c: Context) {
       let lastFullContent = '';
       let targetResponseId: string | null = null;
       const toolParser = new StreamingToolParser();
-      if (!cleanOutput) toolParser.passThrough = true;
+      if (!toolCalling) toolParser.passThrough = true;
+      if (!cleanOutput) toolParser.skipPreProcess = true;
       const toolCallsOut: any[] = [];
       let buffer = '';
       let completionTokens = 0;
@@ -585,7 +589,8 @@ export async function chatCompletions(c: Context) {
       let lastFullContent = '';
       let targetResponseId: string | null = null;
       const toolParser = new StreamingToolParser();
-      if (!cleanOutput) toolParser.passThrough = true;
+      if (!toolCalling) toolParser.passThrough = true;
+      if (!cleanOutput) toolParser.skipPreProcess = true;
 
       let buffer = '';
       let completionTokens = 0;

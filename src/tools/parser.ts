@@ -22,8 +22,12 @@ export class StreamingToolParser {
   private chunksSinceTagChange = 0;
 
   // When true, feed() returns raw text without any tool call parsing
-  // Controlled by CLEAN_OUTPUT=false env var — for debugging raw Qwen output.
+  // Controlled by TOOL_CALLING=false env var.
   public passThrough = false;
+
+  // When false, skip safety pre-processing (backtick stripping) before parsing.
+  // Only applies when passThrough is false. Controlled by CLEAN_OUTPUT env var.
+  public skipPreProcess = false;
 
   // Recent flushed text buffer — enables cross-chunk orphaned tool call detection.
   // When JSON arrives in one chunk and </tool_call> in the next, the orphan
@@ -48,9 +52,12 @@ export class StreamingToolParser {
       this.buffer += chunk;
       return { text: chunk, toolCalls: [] };
     }
-    // Strip backtick fences adjacent to tool_call tags only (not all backticks)
-    chunk = chunk.replace(this.RE_BACKTICK_BEFORE_OPEN, '');
-    chunk = chunk.replace(this.RE_BACKTICK_AFTER_CLOSE, '');
+    // Safety pre-processing: strip backtick fences around tool_call tags.
+    // Skipped when skipPreProcess=true (CLEAN_OUTPUT=false).
+    if (!this.skipPreProcess) {
+      chunk = chunk.replace(this.RE_BACKTICK_BEFORE_OPEN, '');
+      chunk = chunk.replace(this.RE_BACKTICK_AFTER_CLOSE, '');
+    }
     this.buffer += chunk;
 
     // Enforce max buffer size — truncate oldest data if exceeded
