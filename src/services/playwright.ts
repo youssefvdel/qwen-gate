@@ -10,7 +10,7 @@ export let activePage: Page | null = null;
 let currentHeaders: Record<string, string> = {};
 let cachedQwenHeaders: { headers: Record<string, string>, chatSessionId: string, parentMessageId: string | null } | null = null;
 let lastHeadersTime = 0;
-const HEADERS_TTL = 60 * 60 * 1000;
+const HEADERS_TTL = 5 * 60 * 1000;
 
 // P0: Cached values for getBasicHeaders() — avoids 2 async CDP calls per invocation
 let cachedUserAgent: string | null = null;

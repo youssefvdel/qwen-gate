@@ -3,5 +3,7 @@ npm-debug.log
 qwen_profile
 dist
 .env
+.env.*
 .git
 README.md
+.obsidian-vault

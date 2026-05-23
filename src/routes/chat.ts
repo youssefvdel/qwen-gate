@@ -253,7 +253,10 @@ export async function chatCompletions(c: Context) {
             }
           }
         }
-        prompt += `Tool Response (${toolName || 'tool'}): ${contentStr || ''}\n\n`;
+        const truncated = (contentStr || '').length > 4096
+          ? (contentStr || '').substring(0, 4096) + '\n[...truncated]'
+          : (contentStr || '');
+        prompt += `Tool Response (${toolName || 'tool'}): ${truncated}\n\n`;
       }
     }
 
@@ -319,45 +322,13 @@ export async function chatCompletions(c: Context) {
     // Retry logic with exponential backoff for transient errors
     let stream: ReadableStream;
     let uiSessionId = session.chatId;
-    let retries = 5;
-    let retryDelay = 1000;
-    let lastError: any = null;
-    while (retries > 0) {
-      try {
-        const result = await createQwenStream(finalPrompt, isThinkingModel, body.model, session.chatId, nextParentId);
-        stream = result.stream;
-        uiSessionId = result.uiSessionId;
-        break;
-      } catch (err: any) {
-        lastError = err;
-        retries--;
-
-        // Determine HTTP status if available
-        let httpStatus: number | undefined = err.upstreamStatus || err.status;
-        if (!httpStatus) {
-          const match = err.message?.match(/\b([45]\d{2})\b/);
-          if (match) httpStatus = parseInt(match[1], 10);
-        }
-
-        // Check if retryable: existing specific checks OR generic transient errors
-        const isRetryableError = err instanceof RetryableQwenStreamError ||
-          err.message?.includes('in progress') ||
-          err.message?.includes('Bad_Request') ||
-          isRetryable(err, httpStatus);
-
-        if (!isRetryableError || retries === 0) {
-          sessionPool.release(session.chatId, nextParentId, sessionHeaders);
-          throw err;
-        }
-
-        let useDelay = retryDelay;
-        if (err instanceof RetryableQwenStreamError && err.retryAfterMs !== undefined) {
-          useDelay = err.retryAfterMs;
-        }
-        console.warn(`[Chat] Qwen request failed (${httpStatus || 'network'}), retrying in ${useDelay}ms... (${retries} left): ${err.message}`);
-        await new Promise(r => setTimeout(r, useDelay));
-        retryDelay = Math.min(retryDelay * 2, 10000);
-      }
+    try {
+      const result = await createQwenStream(finalPrompt, isThinkingModel, body.model, session.chatId, nextParentId);
+      stream = result.stream;
+      uiSessionId = result.uiSessionId;
+    } catch (err: any) {
+      sessionPool.release(session.chatId, nextParentId, sessionHeaders);
+      throw err;
     }
 
     const completionId = 'chatcmpl-' + uuidv4();
@@ -654,6 +625,7 @@ export async function chatCompletions(c: Context) {
 
       while (true) {
         if (streamDone) break;
+        if (c.req.raw?.signal?.aborted) { reader.cancel(); break; }
         const { done, value } = await reader.read();
         if (done) break;
 

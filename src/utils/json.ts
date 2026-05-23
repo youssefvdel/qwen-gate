@@ -125,8 +125,8 @@ export function robustParseJSON(str: string): any {
             fixedJson += '\\\\' + char;
           }
         } else if (['n', 'r', 't'].includes(char)) {
-          const isWinPath = /[a-zA-Z]:\\/i.test(cleaned) || /[a-zA-Z]:\//i.test(cleaned);
           const nextChar = cleaned[i + 1] || '';
+          const isWinPath = /[a-zA-Z]:\\/i.test(cleaned.substring(0, i)) || /[a-zA-Z]:\//i.test(cleaned.substring(0, i));
           if (isWinPath && /^[a-zA-Z0-9]/.test(nextChar)) {
             fixedJson += '\\\\' + char;
           } else {

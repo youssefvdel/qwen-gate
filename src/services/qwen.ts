@@ -222,7 +222,8 @@ export async function fetchQwenModels(): Promise<any[]> {
     }
   }
   console.error(`[Qwen] fetchQwenModels failed after 3 attempts:`, lastErr?.message);
-  return cachedModels || [];
+      console.warn(`[Qwen] fetchQwenModels: response missing data array, returning cached or empty`);
+      return cachedModels || [];
 }
 
 export async function createQwenStream(
@@ -315,7 +316,7 @@ export async function createQwenStream(
         'sec-fetch-dest': 'empty',
         'sec-fetch-mode': 'cors',
         'sec-fetch-site': 'same-origin',
-        'timezone': new Date().toString().split(' (')[0],
+        'timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
         'user-agent': reqHeaders['user-agent'],
         'x-accel-buffering': 'no',
         'x-request-id': uuidv4(),
