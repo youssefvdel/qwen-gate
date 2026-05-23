@@ -59,6 +59,9 @@ app.get('/log/json', (c) => {
 });
 
 app.get('/log/stream', (c) => {
+  c.header('Content-Type', 'text/event-stream');
+  c.header('Cache-Control', 'no-cache');
+  c.header('Connection', 'keep-alive');
   return honoStream(c, async (stream) => {
     for (const entry of logStore.getRecent(50)) {
       await stream.write(`data: ${JSON.stringify(entry)}\n\n`);
