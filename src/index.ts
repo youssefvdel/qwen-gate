@@ -34,9 +34,13 @@ function getNetworkAddress() {
 // API Key protection middleware
 app.use('/v1/*', async (c, next) => {
   const apiKey = process.env.API_KEY;
-  if (!apiKey) {
-    return await next();
-  }
+  if (!apiKey) return await next();
+  return bearerAuth({ token: apiKey })(c, next);
+});
+
+app.use('/log*', async (c, next) => {
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) return await next();
   return bearerAuth({ token: apiKey })(c, next);
 });
 

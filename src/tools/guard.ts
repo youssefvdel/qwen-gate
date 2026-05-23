@@ -51,6 +51,8 @@ export function validateSingleToolCall(tc: ParsedToolCall): GuardResult {
   const errors: string[] = [];
   if (!tc.name || typeof tc.name !== 'string' || tc.name.trim() === '') errors.push(`Tool call missing or empty "name" field.`);
   if (!tc.arguments || typeof tc.arguments !== 'object' || Array.isArray(tc.arguments)) errors.push(`Tool call "${tc.name || 'unknown'}" has invalid "arguments".`);
+  if (tc.arguments && typeof tc.arguments === 'object' && !Array.isArray(tc.arguments) && Object.keys(tc.arguments).length === 0)
+    errors.push(`Tool call "${tc.name}" has empty arguments object.`);
   const correctionPrompt = errors.length > 0
     ? `[SYSTEM: Tool call format error]\n${errors.map(e => `- ${e}`).join('\n')}\nPlease fix the format and retry. Use JSON: {"name": "tool_name", "arguments": {"param": "value"}}`
     : '';

@@ -136,9 +136,10 @@ export async function chatCompletions(c: Context) {
   try {
     const body: OpenAIRequest = await c.req.json();
     // STREAMING env var overrides client's stream setting (true=force stream, false=force non-stream)
-    let isStream = body.stream ?? false;
-    if (process.env.STREAMING === 'true') isStream = true;
-    else if (process.env.STREAMING === 'false') isStream = false;
+  let isStream = body.stream ?? false;
+  if (process.env.STREAMING === 'true') isStream = true;
+  else if (process.env.STREAMING === 'false') isStream = false;
+  else if (process.env.NON_STREAMING === 'true') isStream = false;
     // TOOL_CALLING=false disables all tool call parsing — raw Qwen output passes through
     const toolCalling = process.env.TOOL_CALLING !== 'false';
     // CLEAN_OUTPUT=false skips safety pre-processing (backtick stripping) before parsing.
@@ -210,11 +211,12 @@ export async function chatCompletions(c: Context) {
         const sanitized = contentStr
           .replace(/<(?:system|instruction|prompt|rule)\b[^>]*>[\s\S]*?<\/(?:system|instruction|prompt|rule)>/gi, '')
           .replace(/<(?:think|thinking|thought|tool_call|function_call)\b[^>]*>[\s\S]*?<\/(?:think|thinking|thought|tool_call|function_call)>/gi, '')
-          .replace(/<\/?[A-Za-z_][\w\-]*(?:\s[^>]{0,100})?\/?>/g, '')
           .replace(/^(?:System|Assistant|User|Human):\s*/gim, '')
-          .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
-          .substring(0, 32768);
-        prompt += `User: ${sanitized || ''}\n\n`;
+          .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
+        const truncated = sanitized.length > 32768
+          ? sanitized.substring(0, 32768) + '\n\n[TRUNCATED: input exceeded 32768 characters]'
+          : sanitized;
+        prompt += `User: ${truncated || ''}\n\n`;
       } else if (msg.role === 'assistant') {
         let assistantContent = contentStr || '';
         const reasoning = (msg as any).reasoning_content;
@@ -648,8 +650,10 @@ export async function chatCompletions(c: Context) {
       let buffer = '';
       let completionTokens = 0;
       let promptTokens = Math.ceil(finalPrompt.length / 3.5);
+      let streamDone = false;
 
       while (true) {
+        if (streamDone) break;
         const { done, value } = await reader.read();
         if (done) break;
 
@@ -663,6 +667,7 @@ export async function chatCompletions(c: Context) {
           
           const dataStr = trimmed.slice(6);
           if (dataStr === '[DONE]') {
+            streamDone = true;
             break;
           }
 

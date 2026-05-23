@@ -130,7 +130,7 @@ export async function ensureAuthenticated(): Promise<boolean> {
   refreshing = true;
   refreshPromise = (async () => {
     try {
-      if (authState?.refreshToken && authState.expiresAt > Date.now()) {
+      if (authState?.refreshToken) {
         console.log('[Auth] Token expired, attempting refresh...');
         if (await tryRefreshToken()) {
           return true;
