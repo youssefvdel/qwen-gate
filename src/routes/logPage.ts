@@ -103,8 +103,8 @@ function renderEntry(entry, isNew) {
 
   let html = '<div class="entry' + (isNew ? ' entry-new' : '') + '" data-id="' + entry.id + '">';
   
-  // Header
-  html += '<div class="entry-header" onclick="this.parentElement.classList.toggle(\'open\')">';
+  // Header — click handler via JS listener, not inline onclick (avoids quote escaping issues)
+  html += '<div class="entry-header" data-toggle="open">';
   html += '<div><span class="model">' + escapeHtml(entry.model) + '</span>';
   if (hasTools) html += '<span class="badge badge-tools">' + entry.parsedToolCalls.length + ' tool' + (entry.parsedToolCalls.length > 1 ? 's' : '') + '</span>';
   if (hasErrors) html += '<span class="badge badge-errors">' + entry.errors.length + ' error' + (entry.errors.length > 1 ? 's' : '') + '</span>';
@@ -199,6 +199,12 @@ function renderEntry(entry, isNew) {
   html += '</div></div>';
   return html;
 }
+
+// Click handler for expanding entries (delegated, avoids inline onclick escaping issues)
+document.addEventListener('click', function(e) {
+  const header = e.target.closest('[data-toggle="open"]');
+  if (header) header.parentElement.classList.toggle('open');
+});
 
 // Connect to SSE stream for live updates
 const evtSource = new EventSource('/log/stream');
