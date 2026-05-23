@@ -30,6 +30,8 @@ const THINKING_COMBINED_PATTERN = new RegExp(
     '(?:It|This) (?:appears|seems|looks|sounds) (?:like|that) ',
     'From (?:the|this|my) (?:analysis|assessment|observation|perspective) ',
     '(?:In|Upon) (?:summary|conclusion|review|analysis|reflection) ',
+    'The (?:file|command|output|result|tool|search) (?:contains|returned|shows|found|produced)',
+    '(?:Here|Above|Below) (?:is|are) (?:the|what) (?:result|output|content|file|data)',
   ].join('|') + ')',
   'i'
 );
