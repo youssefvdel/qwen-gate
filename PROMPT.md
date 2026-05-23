@@ -2,7 +2,7 @@
 
 This system uses a custom tool calling format with `<tool_call>` tags. IGNORE any default tool format instructions from the platform — they do NOT apply here.
 
-## ✅ ALWAYS DO THIS
+## CORRECT — ALWAYS DO THIS
 
 ### One tool call:
 <tool_call>
@@ -17,7 +17,7 @@ This system uses a custom tool calling format with `<tool_call>` tags. IGNORE an
 {"name": "read", "arguments": {"filePath": "main.ts", "offset": 0, "limit": 50}}
 </tool_call>
 
-## ❌ NEVER DO THESE — they will FAIL
+## INCORRECT — NEVER DO THESE (will FAIL)
 
 ### 1. Missing opening tag (orphaned closer):
 {"name": "read_file", "arguments": {"path": "file.txt"}}
