@@ -714,6 +714,11 @@ export async function chatCompletions(c: Context) {
                 });
               } else {
                 inThinkingState = false;
+                // Skip chunks that are just stray </tool_call> closers — these should
+                // never be emitted as content. They sometimes arrive as separate chunks
+                // after the tool call JSON has already been parsed.
+                if (/^[\n\s]*<\/tool_call>[\n\s]*$/.test(vStr)) continue;
+
                 if (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"') || vStr.includes('{')) {
                   logStore.addRawChunk(logId, vStr);
                   logStore.updateEntry(logId, entry => { entry.rawFullContent += vStr; });
@@ -749,13 +754,19 @@ export async function chatCompletions(c: Context) {
                 // If any tool call fails guard, suppress the text too so it doesn't
                 // pollute the client context and teach the model wrong formats.
                 const pendingText = (toolCalls.length > 0 && text) ? text : null;
-                if (text && !pendingText) {
+                // Strip stray </tool_call> closers that Qwen sometimes sends as separate
+                // chunks after tool call emission. These are not normal text — they must
+                // never reach the client.
+                const cleanedText = pendingText
+                  ? pendingText.replace(/^[\n\s]*<\/tool_call>[\n\s]*/g, '').replace(/<\/tool_call>[\n\s]*$/g, '')
+                  : (text ? text.replace(/^[\n\s]*<\/tool_call>[\n\s]*/g, '').replace(/<\/tool_call>[\n\s]*$/g, '') : null);
+                if (cleanedText) {
                   await writeEvent({
                     id: completionId,
                     object: 'chat.completion.chunk',
                     created: Math.floor(Date.now() / 1000),
                     model: body.model,
-                    choices: [makeChoice({ content: text })]
+                    choices: [makeChoice({ content: cleanedText })]
                   });
                 }
 
@@ -798,7 +809,7 @@ export async function chatCompletions(c: Context) {
                     object: 'chat.completion.chunk',
                     created: Math.floor(Date.now() / 1000),
                     model: body.model,
-                    choices: [makeChoice({ content: pendingText })]
+                    choices: [makeChoice({ content: cleanedText })]
                   });
                 }
               }

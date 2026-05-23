@@ -67,9 +67,7 @@ export class StreamingToolParser {
 
     const result: ParserResult = { text: '', toolCalls: [], thinking: '' };
 
-    if (!this.insideTool) {
-      this.extractThinking(result);
-    }
+    this.extractThinking(result);
 
     if (!this.insideTool) {
       const preExtractLen = this.buffer.length;
@@ -148,6 +146,11 @@ export class StreamingToolParser {
           }
           this.processToolContent(content, result);
           this.insideTool = false;
+
+          const orphanResult: ParserResult = { text: '', toolCalls: [], thinking: '' };
+          const remaining = this.extractOrphanedToolCalls(this.buffer, orphanResult);
+          if (orphanResult.text) result.text += orphanResult.text;
+          this.buffer = remaining;
         } else {
           break;
         }
