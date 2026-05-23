@@ -35,9 +35,57 @@ function hostsEntry() {
   } catch {}
 }
 
+function portRedirect() {
+  const PORT = process.env.PORT || '26405';
+  const portNum = parseInt(PORT, 10);
+  if (portNum > 65535) {
+    console.log(`  ⚠ Port ${PORT} exceeds 65535, skipping redirect`);
+    return;
+  }
+  const plat = platform();
+  try {
+    if (plat === 'linux') {
+      // Check if redirect already exists
+      const check = execSync(`iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-port ${portNum} 2>/dev/null; echo $?`, { stdio: 'pipe', timeout: 5000 }).toString().trim();
+      if (check.endsWith('0')) {
+        console.log(`  ✅ Port 80 → ${portNum} redirect already active`);
+      } else {
+        execSync(`iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port ${portNum}`, { stdio: 'pipe', timeout: 5000 });
+        execSync(`iptables -t nat -A OUTPUT -p tcp -d 127.0.0.1 --dport 80 -j REDIRECT --to-port ${portNum}`, { stdio: 'pipe', timeout: 5000 });
+        console.log(`  ✅ Port 80 → ${portNum} redirect active`);
+        // Try to persist
+        try {
+          execSync('which netfilter-persistent >/dev/null 2>&1 && netfilter-persistent save', { stdio: 'pipe', timeout: 5000 });
+        } catch {}
+      }
+    } else if (plat === 'darwin') {
+      // macOS: use pfctl
+      const anchorFile = '/etc/pf.anchors/qwen-gate';
+      const rule = `rdr pass on lo0 inet proto tcp from any to 127.0.0.1 port 80 -> 127.0.0.1 port ${portNum}`;
+      try {
+        writeFileSync(anchorFile, rule + '\n');
+        execSync(`pfctl -Ef /etc/pf.conf 2>/dev/null; echo \"rdr-anchor \\\"qwen-gate\\\"\" >> /tmp/qwen-pf.conf; pfctl -a qwen-gate -f ${anchorFile} 2>/dev/null`, { stdio: 'pipe', timeout: 5000 });
+        console.log(`  ✅ Port 80 → ${portNum} redirect active (macOS pfctl)`);
+      } catch (e) {
+        console.log(`  ⚠ Could not set up pf redirect: ${e.message}`);
+      }
+    } else if (plat === 'win32') {
+      // Windows: use netsh
+      try {
+        execSync(`netsh interface portproxy add v4tov4 listenport=80 listenaddress=127.0.0.1 connectport=${portNum} connectaddress=127.0.0.1`, { stdio: 'pipe', timeout: 5000 });
+        console.log(`  ✅ Port 80 → ${portNum} redirect active (Windows netsh)`);
+      } catch (e) {
+        console.log(`  ⚠ Could not set up portproxy: ${e.message}. Run as Administrator.`);
+      }
+    }
+  } catch (e) {
+    console.log(`  ⚠ Port redirect skipped: ${e.message}. Run as root/admin or set up manually.`);
+  }
+}
+
 function opencodeConfig() {
   try {
-    const PORT = process.env.PORT || '3000';
+    const PORT = process.env.PORT || '26405';
     const BASE_URL = PORT === '80' ? 'http://qwen-gate' : `http://qwen-gate:${PORT}`;
     const modelDefs = [
       { id: 'qwen3.7-max', name: 'Qwen3.7 Max', ctx: 1000000, out: 81920 },
@@ -95,6 +143,7 @@ function main() {
   loadEnv();
   console.log('\nSetting up Qwen Gate...\n');
   hostsEntry();
+  portRedirect();
   opencodeConfig();
   console.log('\nSetup complete.\n');
 }
