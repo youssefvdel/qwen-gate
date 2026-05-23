@@ -140,14 +140,14 @@ function renderEntry(entry, isNew) {
     // Left: raw output
     const rawContent = entry.rawFullContent || (entry.qwenRawChunks || []).join('');
     html += '<div><div class="raw-label">RAW — before filtering</div><div class="raw-output">';
-    html += escapeHtml(rawContent.length > 2000 ? rawContent.slice(0, 2000) + '\n... [truncated]' : rawContent);
+    html += escapeHtml(rawContent.length > 2000 ? rawContent.slice(0, 2000) + '\\n... [truncated]' : rawContent);
     html += '</div></div>';
     
     // Right: processed output (tool calls + remaining text)
     html += '<div><div class="proc-label">PROCESSED — after parsing</div><div class="proc-output">';
     if (entry.parsedToolCalls && entry.parsedToolCalls.length > 0) {
       for (const tc of entry.parsedToolCalls) {
-        html += '<span style="color:#58a6ff;font-weight:600;">→ Tool call:</span> ' + escapeHtml(tc.name) + '(' + escapeHtml(tc.args ? tc.args.slice(0, 300) : '') + ')\n';
+        html += '<span style="color:#58a6ff;font-weight:600;">→ Tool call:</span> ' + escapeHtml(tc.name) + '(' + escapeHtml(tc.args ? tc.args.slice(0, 300) : '') + ')\\n';
       }
     }
     if (entry.remainingText) {
