@@ -10,6 +10,8 @@ interface PoolEntry {
 
 export class SessionPool {
   private waiting: Array<(entry: PoolEntry) => void> = [];
+  private activeSessions = new Set<string>();
+  private activeCount = 0;
 
   async initialize(): Promise<void> {
     if (process.env.TEST_MOCK_PLAYWRIGHT) {
@@ -27,6 +29,8 @@ export class SessionPool {
       this.createSession()
     ]);
     const entry: PoolEntry = { chatId, parentId: null, inUse: true, cachedHeaders: { cookie, userAgent } };
+    this.activeSessions.add(chatId);
+    this.activeCount++;
     console.log(`[SessionPool] Fresh session: ${chatId.substring(0, 8)}...`);
     return entry;
   }
@@ -42,6 +46,8 @@ export class SessionPool {
           console.error('[SessionPool] Failed to create session for waiter:', err.message);
         });
     }
+    this.activeSessions.delete(chatId);
+    if (this.activeCount > 0) this.activeCount--;
     this.deleteSession(chatId, cachedHeaders);
   }
 
@@ -83,9 +89,9 @@ export class SessionPool {
 
   getStats(): { total: number; available: number; inUse: number; waiting: number } {
     return {
-      total: 0,
-      available: 0,
-      inUse: 0,
+      total: this.activeSessions.size,
+      available: this.activeSessions.size - this.activeCount,
+      inUse: this.activeCount,
       waiting: this.waiting.length,
     };
   }

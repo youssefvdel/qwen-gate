@@ -69,7 +69,7 @@ export interface QwenPayload {
 let cachedModels: any[] | null = null;
 let lastModelsFetch = 0;
 let nativeToolsDisabled = false;
-let disablingNativeToolsInProgress = false;
+let disablingNativeToolsInProgress: Promise<void> | null = null;
 
 export async function setEnglishInstruction(): Promise<void> {
   try {
@@ -108,90 +108,88 @@ export async function setEnglishInstruction(): Promise<void> {
 }
 
 export async function disableNativeTools(): Promise<void> {
-  if (nativeToolsDisabled || disablingNativeToolsInProgress) {
+  if (nativeToolsDisabled) return;
+  if (disablingNativeToolsInProgress) {
+    await disablingNativeToolsInProgress;
     return;
   }
-  disablingNativeToolsInProgress = true;
-
-  try {
-    const { headers } = await getQwenHeaders();
-    
-    const payload = {
-      tools_enabled: {
-        web_extractor: false,
-        web_search_image: false,
-        web_search: false,
-        image_gen_tool: false,
-        code_interpreter: false,
-        history_retriever: false,
-        image_edit_tool: false,
-        bio: false,
-        image_zoom_in_tool: false
+  disablingNativeToolsInProgress = (async () => {
+    try {
+      const { headers } = await getQwenHeaders();
+      const payload = {
+        tools_enabled: {
+          web_extractor: false, web_search_image: false, web_search: false,
+          image_gen_tool: false, code_interpreter: false, history_retriever: false,
+          image_edit_tool: false, bio: false, image_zoom_in_tool: false
+        }
+      };
+      console.log('[Qwen] Disabling native tools...');
+      const response = await fetch('https://chat.qwen.ai/api/v2/users/user/settings/update', {
+        method: 'POST',
+        headers: {
+          'accept': 'application/json, text/plain, */*',
+          'accept-language': 'pt-BR,pt;q=0.9',
+          'content-type': 'application/json',
+          'cookie': headers['cookie'],
+          'origin': 'https://chat.qwen.ai',
+          'referer': 'https://chat.qwen.ai/',
+          'user-agent': headers['user-agent'],
+          'x-request-id': uuidv4(),
+          'bx-ua': headers['bx-ua'],
+          'bx-umidtoken': headers['bx-umidtoken'],
+          'bx-v': headers['bx-v']
+        },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        console.error(`[Qwen] Failed to disable native tools: ${response.status} - ${text}`);
+      } else {
+        console.log('[Qwen] Native tools disabled successfully.');
+        nativeToolsDisabled = true;
       }
-    };
-
-    console.log('[Qwen] Disabling native tools...');
-    const response = await fetch('https://chat.qwen.ai/api/v2/users/user/settings/update', {
-      method: 'POST',
-      headers: {
-        'accept': 'application/json, text/plain, */*',
-        'accept-language': 'pt-BR,pt;q=0.9',
-        'content-type': 'application/json',
-        'cookie': headers['cookie'],
-        'origin': 'https://chat.qwen.ai',
-        'referer': 'https://chat.qwen.ai/',
-        'user-agent': headers['user-agent'],
-        'x-request-id': uuidv4(),
-        'bx-ua': headers['bx-ua'],
-        'bx-umidtoken': headers['bx-umidtoken'],
-        'bx-v': headers['bx-v']
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      console.error(`[Qwen] Failed to disable native tools: ${response.status} - ${text}`);
-    } else {
-      console.log('[Qwen] Native tools disabled successfully.');
-      nativeToolsDisabled = true;
+    } catch (err: any) {
+      console.error(`[Qwen] Error disabling native tools: ${err.message}`);
+    } finally {
+      disablingNativeToolsInProgress = null;
     }
-  } catch (err: any) {
-    console.error(`[Qwen] Error disabling native tools: ${err.message}`);
-  } finally {
-    disablingNativeToolsInProgress = false;
-  }
+  })();
+  return disablingNativeToolsInProgress;
 }
 
 export async function fetchQwenModels(): Promise<any[]> {
   const now = Date.now();
-  if (cachedModels && (now - lastModelsFetch < 3600000)) { // 1 hour cache
+  if (cachedModels && (now - lastModelsFetch < 3600000)) {
     return cachedModels;
   }
 
   const { cookie, userAgent, bxV } = await getBasicHeaders();
   
-  const response = await fetch('https://chat.qwen.ai/api/models', {
-    headers: {
-      'accept': 'application/json, text/plain, */*',
-      'accept-language': 'pt-BR,pt;q=0.9',
-      'cookie': cookie,
-      'referer': 'https://chat.qwen.ai/',
-      'user-agent': userAgent,
-      'x-request-id': uuidv4(),
-      'bx-v': bxV,
-      'timezone': new Date().toString(),
-      'source': 'web'
-    }
-  });
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      if (attempt > 0) await new Promise(r => setTimeout(r, 500 * attempt));
+      const response = await fetch('https://chat.qwen.ai/api/models', {
+        headers: {
+          'accept': 'application/json, text/plain, */*',
+          'accept-language': 'pt-BR,pt;q=0.9',
+          'cookie': cookie,
+          'referer': 'https://chat.qwen.ai/',
+          'user-agent': userAgent,
+          'x-request-id': uuidv4(),
+          'bx-v': bxV,
+          'timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+          'source': 'web'
+        }
+      });
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch models from Qwen: ${response.status} ${response.statusText}`);
-  }
+      if (!response.ok) {
+        throw new Error(`Failed to fetch models from Qwen: ${response.status} ${response.statusText}`);
+      }
 
-  const json = await response.json();
-  if (json.data && Array.isArray(json.data)) {
-    const models = json.data.map((m: any) => {
+      const json = await response.json();
+      if (json.data && Array.isArray(json.data)) {
+        const models = json.data.map((m: any) => {
       const id = (m.id as string).toLowerCase().replace(/\./g, '-');
       const specs = (modelSpecs as any)[id] || (modelSpecs as any)[id.replace(/-no-thinking$/, '')] || { max_context: 1000000, max_output: 65536, modalities: ['text'] };
       return {
@@ -218,8 +216,13 @@ export async function fetchQwenModels(): Promise<any[]> {
     lastModelsFetch = now;
     return extendedModels;
   }
-
-  return [];
+      return [];
+    } catch (err: any) {
+      lastErr = err;
+    }
+  }
+  console.error(`[Qwen] fetchQwenModels failed after 3 attempts:`, lastErr?.message);
+  return cachedModels || [];
 }
 
 export async function createQwenStream(

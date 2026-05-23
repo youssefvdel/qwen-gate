@@ -255,8 +255,7 @@ export async function chatCompletions(c: Context) {
       }
     }
 
-    // Always inject tool calling format instruction — model must always know the format
-    systemPrompt += TOOL_FORMAT_INSTRUCTION;
+    if (toolCalling) systemPrompt += TOOL_FORMAT_INSTRUCTION;
 
     // Inject tools available and tool_choice if provided
     if (bodyAny.tools && Array.isArray(bodyAny.tools) && bodyAny.tools.length > 0) {
@@ -561,6 +560,7 @@ export async function chatCompletions(c: Context) {
           contentPreview: lastFullContent.length > 500 ? lastFullContent.substring(0, 500) + '...' : lastFullContent,
         };
         entry.remainingText = lastFullContent.length > 500 ? lastFullContent.substring(0, 500) + '...' : lastFullContent;
+        if (correctionPrompts.length > 0) entry.errors.push(...correctionPrompts);
       });
 
       if (process.env.DEBUG) {

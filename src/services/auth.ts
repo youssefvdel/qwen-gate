@@ -158,6 +158,7 @@ export async function initAuth(): Promise<void> {
   if (initDone) return;
   initDone = true;
   await ensureAuthenticated();
+  import('./qwen.ts').then(m => m.setEnglishInstruction()).catch(() => {});
 }
 
 export function clearAuth(): void {

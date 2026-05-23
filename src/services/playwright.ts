@@ -190,6 +190,7 @@ export async function closePlaywright() {
     context = null;
     activePage = null;
   }
+  cachedUserAgent = null;
 }
 
 export async function loginToQwen(email: string, password: string): Promise<boolean> {

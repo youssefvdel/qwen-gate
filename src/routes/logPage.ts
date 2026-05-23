@@ -212,20 +212,21 @@ evtSource.onmessage = function(e) {
   try {
     const entry = JSON.parse(e.data);
     const existing = document.querySelector('[data-id="' + entry.id + '"]');
+    let isNew = false;
     if (existing) {
-      // Update existing entry
       existing.outerHTML = renderEntry(entry, false);
     } else {
-      // New entry — prepend
       entriesEl.insertAdjacentHTML('afterbegin', renderEntry(entry, true));
       entryCount++;
-      // Remove old entries beyond 50
+      isNew = true;
       while (entriesEl.children.length > 50) {
         entriesEl.removeChild(entriesEl.lastChild);
       }
     }
-    totalToolCalls += (entry.parsedToolCalls || []).length;
-    totalErrors += (entry.errors || []).length;
+    if (isNew) {
+      totalToolCalls += (entry.parsedToolCalls || []).length;
+      totalErrors += (entry.errors || []).length;
+    }
     countEl.textContent = entryCount;
     toolCountEl.textContent = totalToolCalls;
     errorCountEl.textContent = totalErrors;
