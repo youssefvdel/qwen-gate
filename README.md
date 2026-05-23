@@ -1,5 +1,7 @@
 # Qwen Gate
 
+> **⚠️ Disclaimer**: This project is for **educational and study purposes only**. It is an OpenAI-compatible API gateway that interfaces with Qwen models via chat.qwen.ai. The project is not affiliated with, endorsed by, or sponsored by Alibaba Group, Qwen, or chat.qwen.ai. All Qwen models and the chat.qwen.ai service are the property of their respective owners. Users are responsible for complying with chat.qwen.ai's terms of service. The author assumes no responsibility for misuse, unauthorized access, or any violations of third-party terms.
+
 OpenAI-compatible API gateway for **Qwen models (chat.qwen.ai)** using Playwright browser automation. Supports tool calling, thinking/reasoning, streaming, and session autoscaling.
 
 ## Quick Start
