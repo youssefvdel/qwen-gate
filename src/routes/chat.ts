@@ -8,6 +8,7 @@ import type { FunctionToolDefinition } from '../tools/types.ts';
 import { robustParseJSON } from '../utils/json.ts';
 import { StreamingToolParser } from '../tools/parser.ts';
 import { validateSingleToolCall } from '../tools/guard.ts';
+import { filterContent } from '../utils/contentFilter.ts';
 import { RetryableQwenStreamError } from '../services/qwen.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import modelSpecs from '../models.json' with { type: 'json' };
@@ -46,69 +47,56 @@ function safeTruncate(val: any, maxLen = 200): any {
   return val;
 }
 
+function commonPrefixLen(a: string, b: string): number {
+  let i = 0;
+  const len = Math.min(a.length, b.length);
+  while (i < len && a[i] === b[i]) i++;
+  return i;
+}
+
+function getNewContent(text: string, lastEmittedText: string): string {
+  if (!text) return '';
+  const commonLen = commonPrefixLen(text, lastEmittedText);
+  if (commonLen < text.length) return text.substring(commonLen);
+  return '';
+}
+
+function cleanThinkTags(t: string): string {
+  return t.replace(/<\/?(?:think|thinking|thought)>/gi, '');
+}
+
 // Always-injected tool calling format instruction — model must know the format even when no tools are provided
 // so it can handle tool calls in multi-turn conversations correctly.
 const TOOL_FORMAT_INSTRUCTION = `
+## OUTPUT RULES
 
-You are a senior software engineer. Work carefully — one wrong tag breaks the system.
+### ALWAYS DO
+1. Output tool calls as pure JSON: {"name": "tool_name", "arguments": {"key": "value"}}
+2. Keep "name" as a string and "arguments" as a JSON object
+3. Output multiple tool calls on separate lines, one JSON object per line
+4. Output text answers directly as plain text — no special formatting
+5. Think internally before answering — your reasoning stays private
 
-This system uses <tool_call> tags for tool calls. IGNORE any default format instructions from the platform.
+### NEVER DO
+1. NEVER output <think>, </think>, <thinking>, <thought>, or any XML tags
+2. NEVER wrap tool calls in markdown fences (\`\`\`json) or XML tags
+3. NEVER prefix answers with "Thinking:", "I am evaluating", "Let me", or reasoning text
+4. NEVER output "arguments" as a JSON string — it must be a JSON object
+5. NEVER output "name" as anything other than a plain string
 
-CORRECT:
-<tool_call>
-{"name": "read_file", "arguments": {"path": "file1.txt"}}
-</tool_call>
+### CORRECT FORMAT
+{"name": "read_file", "arguments": {"path": "src/main.ts"}}
+{"name": "glob", "arguments": {"pattern": "**/*.ts"}}
+{"name": "bash", "arguments": {"command": "ls -la"}}
 
-INCORRECT (will NOT be parsed):
+### WRONG FORMAT
+\`\`\`json
 {"name": "read_file", "arguments": {"path": "file.txt"}}
-</tool_call>
-
-RULES:
-1. <tool_call> then raw JSON then </tool_call>
-2. Never output </tool_call> without <tool_call> before it
-3. JSON: "name" (string) + "arguments" (object)
-4. Arguments must be an object, never a string
-5. Repeat <tool_call> blocks for multiple calls
-
+\`\`\`
+<tool_call>{"name": "read_file", "arguments": {"path": "file.txt"}}</tool_call>
+{"name": "read_file", "arguments": "{\\"path\\": \\"file.txt\\"}"}
+Thinking: I should read the file... {"name": "read_file", ...}
 `;
-
-export interface DeltaResult {
-  delta: string;
-  matchedContent: string;
-}
-
-export function getIncrementalDelta(oldStr: string, newStr: string): DeltaResult {
-  if (!oldStr) {
-    return { delta: newStr, matchedContent: newStr };
-  }
-  if (newStr === oldStr) {
-    return { delta: '', matchedContent: oldStr };
-  }
-
-  // Heuristic to detect if newStr is cumulative or incremental:
-  // If newStr is cumulative, it should share a common prefix with oldStr.
-  let commonPrefixLen = 0;
-  const maxLen = Math.min(oldStr.length, newStr.length);
-  while (commonPrefixLen < maxLen && oldStr[commonPrefixLen] === newStr[commonPrefixLen]) {
-    commonPrefixLen++;
-  }
-
-  const threshold = Math.min(oldStr.length, 4);
-  if (commonPrefixLen >= threshold) {
-    return {
-      delta: newStr.substring(commonPrefixLen),
-      matchedContent: newStr
-    };
-  }
-
-  // If the prefix check fails, we treat it as strictly incremental (or pure delta).
-  // We avoid fallback search/sliding overlap checks which cause disastrous false-positive
-  // corruptions on incremental streams with repetitive code/words (like "import {", "const", etc.).
-  return {
-    delta: newStr,
-    matchedContent: oldStr + newStr
-  };
-}
 
 function parseQwenErrorPayload(raw: string): { message: string; status: number } | null {
   const text = raw.trim();
@@ -149,6 +137,9 @@ export async function chatCompletions(c: Context) {
     // CLEAN_OUTPUT=false skips safety pre-processing (backtick stripping) before parsing.
     // Only applies when TOOL_CALLING=true.
     const cleanOutput = toolCalling && process.env.CLEAN_OUTPUT !== 'false';
+    // CONTENT_FILTER=false disables thinking/XML stripping and space collapsing.
+    // Set this if the content filter is too aggressive and removes content you want to keep.
+    const contentFiltering = process.env.CONTENT_FILTER !== 'false';
     
     const messages = body.messages || [];
 
@@ -209,7 +200,14 @@ export async function chatCompletions(c: Context) {
       if (msg.role === 'system') {
         systemPrompt += (contentStr || '') + '\n\n';
       } else if (msg.role === 'user') {
-        prompt += `User: ${contentStr || ''}\n\n`;
+        const sanitized = contentStr
+          .replace(/<(?:system|instruction|prompt|rule)\b[^>]*>[\s\S]*?<\/(?:system|instruction|prompt|rule)>/gi, '')
+          .replace(/<(?:think|thinking|thought|tool_call|function_call)\b[^>]*>[\s\S]*?<\/(?:think|thinking|thought|tool_call|function_call)>/gi, '')
+          .replace(/<\/?[A-Za-z_][\w\-]*(?:\s[^>]{0,100})?\/?>/g, '')
+          .replace(/^(?:System|Assistant|User|Human):\s*/gim, '')
+          .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
+          .substring(0, 32768);
+        prompt += `User: ${sanitized || ''}\n\n`;
       } else if (msg.role === 'assistant') {
         let assistantContent = contentStr || '';
         const reasoning = (msg as any).reasoning_content;
@@ -226,8 +224,8 @@ export async function chatCompletions(c: Context) {
                parsedArgs = args;
              }
              const payload = { name: tc.function?.name, arguments: parsedArgs };
-             const toolCallStr = `\n<tool_call>\n${JSON.stringify(payload)}\n</tool_call>`;
-             assistantContent = assistantContent ? assistantContent + toolCallStr : toolCallStr.trim();
+             const toolCallStr = JSON.stringify(payload);
+             assistantContent = assistantContent ? assistantContent + '\n' + toolCallStr : toolCallStr;
            }
         }
         prompt += `Assistant: ${assistantContent.trim()}\n\n`;
@@ -268,7 +266,7 @@ export async function chatCompletions(c: Context) {
       });
       const toolsJson = JSON.stringify(formattedTools, null, 2);
       
-      systemPrompt += `\n\n# TOOLS AVAILABLE\nYou have access to:\n${toolsJson}\n\nFormat:\n<tool_call>\n{"name": "tool_name", "arguments": {"param": "value"}}\n</tool_call>\n\nOnly <tool_call> JSON </tool_call> works. Other formats will NOT be parsed.\n\n`;
+      systemPrompt += `\n\n# TOOLS AVAILABLE\nYou have access to:\n${toolsJson}\n\nIMPORTANT: When calling a tool, output ONLY raw JSON with no surrounding text:\n{"name": "tool_name", "arguments": {"param": "value"}}\n\nNever wrap tool calls in fences or backticks.\n\n`;
       
       if (bodyAny.tool_choice === 'required' || bodyAny.tool_choice === 'any') {
         systemPrompt += `CRITICAL: You MUST call one of the available tools in this response. Do NOT respond with text. Do NOT answer the user directly. Always use a tool.\n\n`;
@@ -363,11 +361,11 @@ export async function chatCompletions(c: Context) {
       let currentThoughtIndex = 0;
       let reasoningBuffer = '';
       let lastFullContent = '';
+      let lastEmittedText = '';
       let targetResponseId: string | null = null;
       const toolParser = new StreamingToolParser();
       if (!toolCalling) toolParser.passThrough = true;
       if (!cleanOutput) toolParser.skipPreProcess = true;
-      toolParser.bufferToolCalls = true;
       const toolCallsOut: any[] = [];
       const correctionPrompts: string[] = []; // Guard rejection messages for logging
 
@@ -428,11 +426,9 @@ export async function chatCompletions(c: Context) {
               } else if (delta.phase === 'answer') {
                 isThinkingChunk = false;
                 if (delta.content !== undefined) {
-                  const newContent = delta.content || '';
-                  const result = getIncrementalDelta(lastFullContent, newContent);
-                  vStr = result.delta;
+                  vStr = delta.content || '';
+                  lastFullContent += delta.content || '';
                   if (vStr) {
-                    lastFullContent = result.matchedContent;
                     foundStr = true;
                   }
                 }
@@ -444,17 +440,22 @@ export async function chatCompletions(c: Context) {
               if (isThinkingChunk) {
                 reasoningBuffer += vStr;
               } else {
-                if (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"') || vStr.includes('{')) {
+                if (vStr.includes('"name"') || vStr.includes('{')) {
                   logStore.addRawChunk(logId, vStr);
                   logStore.updateEntry(logId, entry => { entry.rawFullContent += vStr; });
                 }
-                if (process.env.DEBUG && (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"'))) {
+                if (process.env.DEBUG && (vStr.includes('"name"'))) {
                   logDebug('QWEN RAW CHUNK (non-streaming)', vStr);
                 }
-                const { toolCalls, thinking } = toolParser.feed(vStr);
-                // Accumulate thinking content from inline <think> tags
+                const { toolCalls, thinking, text: parserText } = toolParser.feed(vStr);
                 if (thinking) {
                   reasoningBuffer += thinking;
+                }
+                if (contentFiltering && parserText) {
+                  const { thinking: chunkThinking } = filterContent(parserText);
+                  if (chunkThinking) {
+                    reasoningBuffer = reasoningBuffer ? reasoningBuffer + '\n' + chunkThinking : chunkThinking;
+                  }
                 }
                 for (const tc of toolCalls) {
                   // Guard: validate tool call before sending to client
@@ -531,10 +532,14 @@ export async function chatCompletions(c: Context) {
         total_tokens: promptTokens + completionTokens,
         prompt_tokens_details: { cached_tokens: 0 }
       };
-      const cleanedContent = lastFullContent
-        .replace(/<\/?(?:think|thinking)>/gi, '').trim();
-      const message: any = { role: 'assistant', content: toolCallsOut.length ? null : cleanedContent };
-        if (reasoningBuffer) message.reasoning_content = reasoningBuffer;
+      const { cleanText: filteredContent, thinking: filteredReasoning } = contentFiltering
+        ? filterContent(lastFullContent)
+        : { cleanText: lastFullContent, thinking: '' };
+      if (filteredReasoning) {
+        reasoningBuffer = reasoningBuffer ? reasoningBuffer + '\n' + filteredReasoning : filteredReasoning;
+      }
+      const message: any = { role: 'assistant', content: toolCallsOut.length ? null : filteredContent };
+      if (reasoningBuffer) message.reasoning_content = reasoningBuffer;
       if (toolCallsOut.length) toolCallsOut.forEach((tc, idx) => tc.index = idx);
       if (toolCallsOut.length) message.tool_calls = toolCallsOut;
 
@@ -621,12 +626,13 @@ export async function chatCompletions(c: Context) {
       let currentAppendPath = '';
       
       let reasoningBuffer = '';
+      let lastEmittedText = '';
+      let lastEmittedThinking = '';
       let lastFullContent = '';
       let targetResponseId: string | null = null;
       const toolParser = new StreamingToolParser();
       if (!toolCalling) toolParser.passThrough = true;
       if (!cleanOutput) toolParser.skipPreProcess = true;
-      toolParser.bufferToolCalls = true;
 
       let buffer = '';
       let completionTokens = 0;
@@ -679,6 +685,9 @@ export async function chatCompletions(c: Context) {
                 isThinkingChunk = true;
                 if (delta.extra && delta.extra.summary_thought && delta.extra.summary_thought.content) {
                   const thoughts = delta.extra.summary_thought.content;
+                  if (thoughts.length <= currentThoughtIndex) {
+                    currentThoughtIndex = 0;
+                  }
                   if (thoughts.length > currentThoughtIndex) {
                     vStr = thoughts.slice(currentThoughtIndex).join('\n');
                     currentThoughtIndex = thoughts.length;
@@ -688,11 +697,8 @@ export async function chatCompletions(c: Context) {
               } else if (delta.phase === 'answer') {
                 isThinkingChunk = false;
                 if (delta.content !== undefined) {
-                  const newContent = delta.content || '';
-                  const result = getIncrementalDelta(lastFullContent, newContent);
-                  vStr = result.delta;
+                  vStr = delta.content || '';
                   if (vStr) {
-                    lastFullContent = result.matchedContent;
                     foundStr = true;
                   }
                 }
@@ -716,16 +722,16 @@ export async function chatCompletions(c: Context) {
                 inThinkingState = false;
                 // Strip stray tag closers that arrive as separate chunks after the
                 // content has been parsed.
-                if (/^[\n\s]*<\/?(?:tool_call|think|thinking)[\s>]*[\n\s]*$/.test(vStr)) continue;
+                if (/^[\n\s]*<\/?(?:think|thinking)[\s>]*[\n\s]*$/.test(vStr)) continue;
 
-                if (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"') || vStr.includes('{')) {
+                if (vStr.includes('"name"') || vStr.includes('{')) {
                   logStore.addRawChunk(logId, vStr);
                   logStore.updateEntry(logId, entry => { entry.rawFullContent += vStr; });
                 }
-                if (process.env.DEBUG && (vStr.includes('<tool_call>') || vStr.includes('</tool_call>') || vStr.includes('"name"'))) {
+                if (process.env.DEBUG && (vStr.includes('"name"'))) {
                   logDebug('QWEN RAW CHUNK (streaming)', vStr);
                 }
-                const { text, toolCalls, thinking } = toolParser.feed(vStr);
+                const { text: rawText, toolCalls, thinking: parserThinking } = toolParser.feed(vStr);
 
                 if (toolCalls.length) {
                   logStore.updateEntry(logId, entry => {
@@ -738,39 +744,55 @@ export async function chatCompletions(c: Context) {
                   logDebug('PARSED TOOL CALLS (streaming)', toolCalls.map(tc => ({ name: tc.name, arguments: tc.arguments })));
                 }
 
-                // Emit thinking content as reasoning_content (stripped from regular text)
-                if (thinking) {
+                if (rawText) lastFullContent += rawText;
+
+                const { cleanText: fullFilteredText, thinking: filteredThinking } = (contentFiltering && lastFullContent)
+                  ? filterContent(lastFullContent)
+                  : { cleanText: lastFullContent || '', thinking: '' };
+
+                // Emit parser-captured thinking first (from <think> tags)
+                if (parserThinking) {
                   await writeEvent({
                     id: completionId,
                     object: 'chat.completion.chunk',
                     created: Math.floor(Date.now() / 1000),
                     model: body.model,
-                    choices: [makeChoice({ reasoning_content: thinking })]
+                    choices: [makeChoice({ reasoning_content: parserThinking })]
                   });
                 }
 
-                // Hold text when tool calls are present — validate first.
-                // If any tool call fails guard, suppress the text too so it doesn't
-                // pollute the client context and teach the model wrong formats.
-                const pendingText = (toolCalls.length > 0 && text) ? text : null;
-                // Clean answer text — strip stray tag closers/chunks and inline think tags
-                const cleanText = (text: string) => text
-                  .replace(/^[\n\s]*<\/?(?:tool_call|think|thinking)[\s>]*[\n\s]*/g, '')
-                  .replace(/<\/?(?:think|thinking)>/gi, '')
-                  .replace(/^[\n\s]*>[\n\s]*/, '')  // trailing '>' from broken </tool_call>
-                  .replace(/[\n\s]*$/, '');
+                // Emit filter-captured thinking as reasoning_content (delta only)
+                if (filteredThinking) {
+                  const thinkingDelta = getNewContent(filteredThinking, lastEmittedThinking);
+                  if (thinkingDelta) {
+                    lastEmittedThinking += thinkingDelta;
+                    await writeEvent({
+                      id: completionId,
+                      object: 'chat.completion.chunk',
+                      created: Math.floor(Date.now() / 1000),
+                      model: body.model,
+                      choices: [makeChoice({ reasoning_content: thinkingDelta })]
+                    });
+                  }
+                }
 
+                const pendingText = (toolCalls.length > 0 && fullFilteredText) ? fullFilteredText : null;
                 const cleanedText = pendingText
-                  ? cleanText(pendingText)
-                  : (text ? cleanText(text) : null);
-                if (cleanedText) {
-                  await writeEvent({
-                    id: completionId,
-                    object: 'chat.completion.chunk',
-                    created: Math.floor(Date.now() / 1000),
-                    model: body.model,
-                    choices: [makeChoice({ content: cleanedText })]
-                  });
+                  ? cleanThinkTags(pendingText)
+                  : (fullFilteredText ? cleanThinkTags(fullFilteredText) : null);
+
+                if (cleanedText && !pendingText) {
+                  const contentDelta = getNewContent(cleanedText, lastEmittedText);
+                  if (contentDelta) {
+                    lastEmittedText += contentDelta;
+                    await writeEvent({
+                      id: completionId,
+                      object: 'chat.completion.chunk',
+                      created: Math.floor(Date.now() / 1000),
+                      model: body.model,
+                      choices: [makeChoice({ content: contentDelta })]
+                    });
+                  }
                 }
 
                 let allToolCallsValid = true;
@@ -806,14 +828,18 @@ export async function chatCompletions(c: Context) {
 
                 // Only send text if all tool calls passed guard validation.
                 // If any failed, suppress the text to prevent polluting client context.
-                if (pendingText && allToolCallsValid) {
-                  await writeEvent({
-                    id: completionId,
-                    object: 'chat.completion.chunk',
-                    created: Math.floor(Date.now() / 1000),
-                    model: body.model,
-                    choices: [makeChoice({ content: cleanedText })]
-                  });
+                if (pendingText && allToolCallsValid && cleanedText) {
+                  const contentDelta = getNewContent(cleanedText, lastEmittedText);
+                  if (contentDelta) {
+                    lastEmittedText += contentDelta;
+                    await writeEvent({
+                      id: completionId,
+                      object: 'chat.completion.chunk',
+                      created: Math.floor(Date.now() / 1000),
+                      model: body.model,
+                      choices: [makeChoice({ content: contentDelta })]
+                    });
+                  }
                 }
               }
             }
@@ -859,12 +885,20 @@ export async function chatCompletions(c: Context) {
           choices: [makeChoice({ reasoning_content: remainingThinking })]
         });
       }
-      const cleanText = (t: string) => t
-        .replace(/<\/?(?:think|thinking)>/gi, '')
-        .replace(/^[\n\s]*<\/?tool_call[\s>]*[\n\s]*/g, '')
-        .replace(/[\n\s]*$/, '');
-      if (remainingText) {
-        const ct = cleanText(remainingText);
+      const { cleanText: flushCleanText, thinking: flushThinking } = (contentFiltering && remainingText)
+        ? filterContent(remainingText)
+        : { cleanText: remainingText || '', thinking: '' };
+      if (flushThinking) {
+        await writeEvent({
+          id: completionId,
+          object: 'chat.completion.chunk',
+          created: Math.floor(Date.now() / 1000),
+          model: body.model,
+          choices: [makeChoice({ reasoning_content: flushThinking })]
+        });
+      }
+      if (flushCleanText) {
+        const ct = flushCleanText.replace(/[\n\s]*$/, '');
         if (ct) {
           await writeEvent({
             id: completionId,

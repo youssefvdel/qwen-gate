@@ -37,9 +37,6 @@ export interface LLMResponse {
   finishReason: string;
 }
 
-const TOOL_START_TAG = '<' + 'tool_call>';
-const TOOL_END_TAG = '</' + 'tool_call>';
-
 export function parseToolCallsFromContent(content: string): {
   textContent: string;
   toolCalls: ParsedToolCall[];
@@ -49,49 +46,75 @@ export function parseToolCallsFromContent(content: string): {
   let textContent = '';
 
   while (true) {
-    const startIdx = remaining.indexOf(TOOL_START_TAG);
-    if (startIdx === -1) {
+    const nameIdx = remaining.indexOf('"name"');
+    if (nameIdx === -1) {
       textContent += remaining;
       break;
     }
 
-    textContent += remaining.substring(0, startIdx);
+    if (nameIdx > 0) {
+      textContent += remaining.substring(0, nameIdx);
+    }
 
-    const endIdx = remaining.indexOf(TOOL_END_TAG, startIdx + TOOL_START_TAG.length);
-    if (endIdx === -1) {
-      textContent += remaining.substring(startIdx);
+    const searchFrom = Math.max(0, nameIdx - 300);
+    const braceIdx = remaining.lastIndexOf('{', nameIdx);
+    if (braceIdx === -1 || braceIdx < searchFrom) {
+      textContent += remaining[0] || '';
+      remaining = remaining.substring(1);
+      continue;
+    }
+
+    let after = remaining.substring(braceIdx);
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let i = 0;
+
+    while (i < after.length) {
+      const c = after[i];
+      if (escaped) { escaped = false; i++; continue; }
+      if (c === '\\') { escaped = true; i++; continue; }
+      if (c === '"') { inString = !inString; i++; continue; }
+      if (inString) { i++; continue; }
+      if (c === '{' || c === '[') { depth++; i++; continue; }
+      if (c === '}' || c === ']') {
+        depth--;
+        if (depth === 0) {
+          i++;
+          break;
+        }
+        i++;
+      } else {
+        i++;
+      }
+    }
+
+    if (depth !== 0) {
+      textContent += remaining;
       break;
     }
 
-    let jsonStr = remaining
-      .substring(startIdx + TOOL_START_TAG.length, endIdx)
-      .trim();
-
-    // Strip markdown code fences that models sometimes add
-    const fenceMatch = jsonStr.match(/\x60\x60\x60(?:json|JSON)?\s*\n?([\s\S]*?)\n?\s*\x60\x60\x60/);
-    if (fenceMatch) {
-      jsonStr = fenceMatch[1].trim();
-    }
+    const jsonStr = after.substring(0, i);
 
     try {
       const parsed = robustParseJSON(jsonStr);
-      if (!parsed) throw new Error('Failed to parse JSON');
-      
+      if (!parsed || typeof parsed !== 'object') throw new Error('Invalid JSON');
+
       toolCalls.push({
         id: 'call_' + uuidv4(),
         name: parsed.name || '',
-        arguments: parsed.arguments 
+        arguments: parsed.arguments
           ? (typeof parsed.arguments === 'string' ? JSON.parse(parsed.arguments) : parsed.arguments)
           : (() => {
               const { name, ...rest } = parsed;
               return rest;
             })(),
       });
-    } catch (e) {
-      textContent += TOOL_START_TAG + jsonStr + TOOL_END_TAG;
+    } catch {
+      textContent += jsonStr;
     }
 
-    remaining = remaining.substring(endIdx + TOOL_END_TAG.length);
+    remaining = after.substring(i);
   }
 
   return { textContent: textContent.trim(), toolCalls };
@@ -150,9 +173,8 @@ function buildAssistantToolCallMessage(
   content: string | null,
   toolCalls: ParsedToolCall[]
 ): Record<string, unknown> {
-  return {
+  const msg: Record<string, unknown> = {
     role: 'assistant',
-    content: content || null,
     tool_calls: toolCalls.map((tc) => ({
       id: tc.id,
       type: 'function',
@@ -164,6 +186,8 @@ function buildAssistantToolCallMessage(
       },
     })),
   };
+  if (content) msg.content = content;
+  return msg;
 }
 
 export async function runExecutionLoop(
@@ -174,6 +198,8 @@ export async function runExecutionLoop(
 ): Promise<string> {
   const maxTurns = config.maxTurns ?? 10;
   const debug = config.debug ?? false;
+  let consecutiveGuardFailures = 0;
+  let lastGuardErrors = '';
 
   const tools = registry.listNames().length > 0
     ? registry.toOpenAITools()
@@ -208,21 +234,32 @@ export async function runExecutionLoop(
       return effectiveContent || '';
     }
 
-    // ── Guard: validate tool calls before execution ────────────────
-    const guardResult = validateToolCalls(effectiveToolCalls, response.content || '');
+    const guardResult = validateToolCalls(effectiveToolCalls);
 
     if (!guardResult.ok) {
+      const errorKey = guardResult.errors.join('|');
+      if (errorKey === lastGuardErrors) {
+        consecutiveGuardFailures++;
+      } else {
+        consecutiveGuardFailures = 1;
+        lastGuardErrors = errorKey;
+      }
+      if (consecutiveGuardFailures >= 3) {
+        throw new Error(
+          `Tool call format correction failed after ${consecutiveGuardFailures} attempts. ` +
+          `Errors: ${guardResult.errors.join('; ')}`
+        );
+      }
       if (debug) {
         console.log('[executor] Tool call validation FAILED:', guardResult.errors);
       }
-      // Send correction prompt back to model instead of executing
-      messages.push(buildAssistantToolCallMessage(effectiveContent, effectiveToolCalls));
       messages.push({
         role: 'system',
         content: guardResult.correctionPrompt,
       });
       continue;
     }
+    consecutiveGuardFailures = 0;
 
     const context: ToolContext = {
       messages,
