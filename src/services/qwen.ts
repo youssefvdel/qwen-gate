@@ -2,6 +2,7 @@ import { getQwenHeaders, getBasicHeaders } from './playwright.ts';
 import { v4 as uuidv4 } from 'uuid';
 import modelSpecs from '../models.json' with { type: 'json' };
 import { withRetry } from '../utils/retry.ts';
+import { throttleAccount, pickAccount } from './auth.ts';
 
 export class RetryableQwenStreamError extends Error {
   readonly retryAfterMs: number;
@@ -195,8 +196,9 @@ export async function createQwenStream(
   enableThinking: boolean, 
   modelId: string,
   chatId?: string,
-  parentId?: string | null
-): Promise<{ stream: ReadableStream, headers: Record<string, string>, uiSessionId: string }> {
+  parentId?: string | null,
+  accountEmail?: string
+): Promise<{ stream: ReadableStream, headers: Record<string, string>, uiSessionId: string, accountEmail?: string }> {
   const { headers } = await getQwenHeaders(false);
   const actualParentId: string | null = parentId !== undefined ? parentId : null;
   const timestamp = Math.floor(Date.now() / 1000);
@@ -266,8 +268,11 @@ export async function createQwenStream(
   // Check if retries are explicitly disabled
   const retriesEnabled = process.env.RETRY_ENABLED !== 'false';
 
+  // Track which account is being used — passed to getQwenHeaders for token injection
+  let currentAccountEmail = accountEmail;
+
   const makeRequest = async (): Promise<{ response: Response; headers: Record<string, string> }> => {
-    const { headers: reqHeaders } = await getQwenHeaders(false);
+    const { headers: reqHeaders } = await getQwenHeaders(false, currentAccountEmail);
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -312,6 +317,19 @@ export async function createQwenStream(
             const wait = errorJson.data?.num !== undefined
               ? ` Wait about ${errorJson.data.num} hour(s) before trying again.`
               : '';
+            
+            // Rate limited — throttle current account and rotate to next
+            if (code === 'RateLimited' && currentAccountEmail) {
+              const throttleMs = (errorJson.data?.num || 1) * 3600_000; // hours to ms
+              throttleAccount(currentAccountEmail, Math.min(throttleMs, 7200_000));
+              // Rotate to next available account for retry
+              const nextAccount = pickAccount();
+              if (nextAccount && nextAccount.email !== currentAccountEmail) {
+                console.log(`[Qwen] Rate limited on ${currentAccountEmail}, rotating to ${nextAccount.email}`);
+                currentAccountEmail = nextAccount.email;
+              }
+            }
+
             let status: number;
             if (code === 'RateLimited') status = 429;
             else if (code === 'Not_Found') status = 404;
@@ -359,5 +377,5 @@ export async function createQwenStream(
     throw new Error(`Qwen returned empty response body (status ${result.response.status})`);
   }
 
-  return { stream: result.response.body, headers: result.headers, uiSessionId: chatId || '' };
+  return { stream: result.response.body, headers: result.headers, uiSessionId: chatId || '', accountEmail: currentAccountEmail };
 }

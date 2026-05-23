@@ -42,8 +42,8 @@ function isThinkingLine(line: string): boolean {
   return THINKING_COMBINED_PATTERN.test(trimmed);
 }
 
-const QWEN_THINK_TAG_PATTERN = /<\/?(?:think|thinking|thought|tool_call|tool_use|function_call)(?:\s[^>]{0,100})?\/?>/gi;
-const QWEN_THINK_BLOCK_START = /<(?:think(?:ing)?|thought|tool_call|tool_use|function_call)[\s>]/i;
+const QWEN_THINK_TAG_PATTERN = /<\/?(?:think|thinking|thought|tool_call|tool_use|function_call|tool)(?:\s[^>]{0,100})?\/?>/gi;
+const QWEN_THINK_BLOCK_START = /<(?:think(?:ing)?|thought|tool_call|tool_use|function_call|tool)[\s>]/i;
 
 /**
  * Filters content to remove thinking/reasoning text and XML tags.

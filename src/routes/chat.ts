@@ -12,6 +12,7 @@ import { filterContent } from '../utils/contentFilter.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import modelSpecs from '../models.json' with { type: 'json' };
 import { logStore } from '../services/logStore.ts';
+import { pickAccount, getAccountStats } from '../services/auth.ts';
 
 // Debug logging — enabled via DEBUG=true env var
 function logDebug(label: string, data: any) {
@@ -60,7 +61,7 @@ function getNewContent(text: string, lastEmittedText: string): string {
 }
 
 function cleanThinkTags(t: string): string {
-  return t.replace(/<\/?(?:think|thinking|thought|tool_call|tool_use|function_call)>/gi, '');
+  return t.replace(/<\/?(?:think|thinking|thought|tool_call|tool_use|function_call|tool)>/gi, '');
 }
 
 // Always-injected tool calling format instruction — model must know the format even when no tools are provided
@@ -208,7 +209,7 @@ export async function chatCompletions(c: Context) {
       } else if (msg.role === 'user') {
         const sanitized = contentStr
           .replace(/<(?:system|instruction|prompt|rule)\b[^>]*>[\s\S]*?<\/(?:system|instruction|prompt|rule)>/gi, '')
-          .replace(/<(?:think|thinking|thought|tool_call|function_call)\b[^>]*>[\s\S]*?<\/(?:think|thinking|thought|tool_call|function_call)>/gi, '')
+          .replace(/<(?:think|thinking|thought|tool_call|tool_use|function_call|tool)\b[^>]*>[\s\S]*?<\/(?:think|thinking|thought|tool_call|tool_use|function_call|tool)>/gi, '')
           .replace(/^(?:System|Assistant|User|Human):\s*/gim, '')
           .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
         const truncated = sanitized.length > 32768
@@ -308,24 +309,33 @@ export async function chatCompletions(c: Context) {
 
     const isThinkingModel = !body.model.includes('no-thinking');
     
-    // Acquire a session from the pool. Each session supports one active
-    // generation at a time. Using a pool of pre-created sessions allows
-    // concurrent requests to proceed simultaneously on different sessions.
-    const session = await sessionPool.acquire();
+    // Pick the best available account (round-robin, non-throttled, least-recently-used)
+    const selectedAccount = pickAccount();
+    const accountEmail = selectedAccount?.email;
+
+    // Acquire a session bound to the selected account. Each session supports one active
+    // generation at a time. Multi-account rotation distributes rate limits.
+    const session = await sessionPool.acquire(accountEmail);
     let nextParentId: string | null = session.parentId;
     const sessionHeaders = session.cachedHeaders;
+    const resolvedEmail = session.accountEmail || accountEmail;
 
-    console.log(`[Chat] model=${body.model} session=${session.chatId.substring(0,8)}... stream=${isStream} thinking=${!body.model.includes('no-thinking')}`);
+    const emailLabel = resolvedEmail ? ` account=${resolvedEmail.split('@')[0]}` : '';
+    console.log(`[Chat] model=${body.model} session=${session.chatId.substring(0,8)}... stream=${isStream} thinking=${!body.model.includes('no-thinking')}${emailLabel}`);
 
     // Retry logic with exponential backoff for transient errors
     let stream: ReadableStream;
     let uiSessionId = session.chatId;
     try {
-      const result = await createQwenStream(finalPrompt, isThinkingModel, body.model, session.chatId, nextParentId);
+      const result = await createQwenStream(finalPrompt, isThinkingModel, body.model, session.chatId, nextParentId, resolvedEmail);
       stream = result.stream;
       uiSessionId = result.uiSessionId;
+      // Account may have rotated during retry (rate limit → switch account)
+      if (result.accountEmail && result.accountEmail !== resolvedEmail) {
+        console.log(`[Chat] Account rotated: ${resolvedEmail?.split('@')[0]} → ${result.accountEmail.split('@')[0]}`);
+      }
     } catch (err: any) {
-      sessionPool.release(session.chatId, nextParentId, sessionHeaders);
+      sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail);
       throw err;
     }
 
@@ -475,7 +485,7 @@ export async function chatCompletions(c: Context) {
 
       const upstreamError = parseQwenErrorPayload(buffer);
       if (upstreamError) {
-        sessionPool.release(session.chatId, nextParentId, sessionHeaders);
+        sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail);
         return c.json({ error: { message: upstreamError.message } }, upstreamError.status as any);
       }
 
@@ -544,7 +554,7 @@ export async function chatCompletions(c: Context) {
         });
       }
 
-      sessionPool.release(session.chatId, nextParentId, sessionHeaders);
+      sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail);
       return c.json({
         id: completionId,
         object: 'chat.completion',
@@ -958,7 +968,7 @@ export async function chatCompletions(c: Context) {
 
       } finally {
         clearInterval(heartbeatInterval);
-        sessionPool.release(session.chatId, nextParentId, sessionHeaders);
+        sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail);
       }
     });
   } catch (err: any) {

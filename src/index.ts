@@ -6,7 +6,7 @@ import { chatCompletions } from './routes/chat.ts';
 import { fetchQwenModels } from './services/qwen.ts';
 import * as dotenv from 'dotenv';
 import { initPlaywright, activePage, BrowserType, getQwenHeaders } from './services/playwright.ts';
-import { initAuth } from './services/auth.ts';
+import { initAuth, getAccountStats, getAccountCount, getAvailableCount } from './services/auth.ts';
 import { networkInterfaces } from 'os';
 import { logStore } from './services/logStore.ts';
 import { logHtml } from './routes/logPage.ts';
@@ -50,8 +50,17 @@ app.get('/health', (c) => {
   return c.json({
     status: pwOk ? 'ok' : 'degraded',
     playwright: pwOk,
+    accounts: {
+      total: getAccountCount(),
+      available: getAvailableCount(),
+    },
     uptime: process.uptime()
   }, pwOk ? 200 : 503);
+});
+
+// Account status — shows which accounts are active, throttled, etc.
+app.get('/accounts', (c) => {
+  return c.json(getAccountStats());
 });
 
 // Log viewer — shows recent client inputs and Qwen outputs

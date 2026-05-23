@@ -1,7 +1,7 @@
 import { chromium, firefox, webkit, BrowserContext, Page } from 'playwright';
 import path from 'path';
 import crypto from 'crypto';
-import { getToken, ensureAuthenticated } from './auth.ts';
+import { getToken, getTokenWithAccount, ensureAuthenticated } from './auth.ts';
 
 export type BrowserType = 'chromium' | 'firefox' | 'webkit' | 'chrome' | 'edge';
 
@@ -62,8 +62,8 @@ export async function getCookies(): Promise<string> {
   return cachedCookies;
 }
 
-export async function getBasicHeaders(): Promise<{ cookie: string, userAgent: string, bxV: string }> {
-  if (process.env.TEST_MOCK_PLAYWRIGHT) return { cookie: 'token=mock', userAgent: 'mock', bxV: '2.5.36' };
+export async function getBasicHeaders(email?: string): Promise<{ cookie: string, userAgent: string, bxV: string, email?: string }> {
+  if (process.env.TEST_MOCK_PLAYWRIGHT) return { cookie: 'token=mock', userAgent: 'mock', bxV: '2.5.36', email: 'mock@test' };
   if (!activePage) throw new Error('Playwright not initialized');
   
   // P0: Use cached userAgent (never changes during browser lifetime)
@@ -74,16 +74,17 @@ export async function getBasicHeaders(): Promise<{ cookie: string, userAgent: st
   let cookieStr = await getCookies();
 
   // Inject auth token from our auth service into the cookie if present
-  const authToken = getToken();
-  if (authToken) {
-    const tokenEntry = `token=${authToken}`;
+  // If email specified, use that account's token. Otherwise pick best available.
+  const tokenInfo = getTokenWithAccount(email);
+  if (tokenInfo) {
+    const tokenEntry = `token=${tokenInfo.token}`;
     // Prepend auth token so it takes priority
     cookieStr = tokenEntry + (cookieStr ? '; ' + cookieStr : '');
   }
 
   const bxV = currentHeaders['bx-v'] || '2.5.36';
   
-  return { cookie: cookieStr, userAgent: cachedUserAgent, bxV };
+  return { cookie: cookieStr, userAgent: cachedUserAgent, bxV, email: tokenInfo?.email };
 }
 
 export async function initPlaywright(headless = true, browserType: BrowserType = 'chromium') {
@@ -283,8 +284,10 @@ async function loginToQwenUI(email: string, password: string): Promise<boolean> 
 
 /**
  * Ensures the session is valid and extracts headers, PoW, and session ID.
+ * @param forceNew Force fresh header extraction (bypass cache)
+ * @param _accountEmail Optional account email (reserved for future per-account header caching)
  */
-export async function getQwenHeaders(forceNew = false): Promise<{ headers: Record<string, string>, chatSessionId: string, parentMessageId: string | null }> {
+export async function getQwenHeaders(forceNew = false, _accountEmail?: string): Promise<{ headers: Record<string, string>, chatSessionId: string, parentMessageId: string | null }> {
   if (!forceNew && cachedQwenHeaders && (Date.now() - lastHeadersTime < HEADERS_TTL)) {
     return cachedQwenHeaders;
   }

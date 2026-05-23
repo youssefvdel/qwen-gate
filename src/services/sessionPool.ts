@@ -1,11 +1,14 @@
 import { v4 as uuidv4 } from 'uuid';
 import { getBasicHeaders } from './playwright.ts';
+import { pickAccount } from './auth.ts';
 
 interface PoolEntry {
   chatId: string;
   parentId: string | null;
   inUse: boolean;
   cachedHeaders?: { cookie: string; userAgent: string };
+  /** Which account email this session is bound to */
+  accountEmail?: string;
 }
 
 export class SessionPool {
@@ -19,28 +22,45 @@ export class SessionPool {
     }
   }
 
-  async acquire(): Promise<PoolEntry> {
+  /**
+   * Acquire a fresh session. If email is provided, use that specific account.
+   * Otherwise, pick the best available account (round-robin, non-throttled).
+   */
+  async acquire(email?: string): Promise<PoolEntry> {
     if (process.env.TEST_MOCK_PLAYWRIGHT) {
       const mockId = process.env.TEST_SESSION_ID || 'mock-session';
-      return { chatId: mockId, parentId: null, inUse: true };
+      return { chatId: mockId, parentId: null, inUse: true, accountEmail: 'mock@test' };
     }
-    const [{ cookie, userAgent }, chatId] = await Promise.all([
-      getBasicHeaders(),
-      this.createSession()
+
+    // If no email specified, pick the best account
+    const resolvedEmail = email || pickAccount()?.email;
+
+    const [{ cookie, userAgent, email: actualEmail }, chatId] = await Promise.all([
+      getBasicHeaders(resolvedEmail),
+      this.createSession(resolvedEmail)
     ]);
-    const entry: PoolEntry = { chatId, parentId: null, inUse: true, cachedHeaders: { cookie, userAgent } };
+    const entry: PoolEntry = {
+      chatId,
+      parentId: null,
+      inUse: true,
+      cachedHeaders: { cookie, userAgent },
+      accountEmail: actualEmail || resolvedEmail,
+    };
     this.activeSessions.add(chatId);
     this.activeCount++;
-    console.log(`[SessionPool] Fresh session: ${chatId.substring(0, 8)}...`);
+    const emailLabel = entry.accountEmail ? ` (${entry.accountEmail.split('@')[0]})` : '';
+    console.log(`[SessionPool] Fresh session: ${chatId.substring(0, 8)}...${emailLabel}`);
     return entry;
   }
 
-  release(chatId: string, _newParentId: string | null, cachedHeaders?: { cookie: string; userAgent: string }): void {
+  release(chatId: string, _newParentId: string | null, cachedHeaders?: { cookie: string; userAgent: string }, accountEmail?: string): void {
     const waiter = this.waiting.shift();
     if (waiter) {
-      Promise.all([getBasicHeaders(), this.createSession()])
-        .then(([{ cookie, userAgent }, id]) => {
-          waiter({ chatId: id, parentId: _newParentId, inUse: true, cachedHeaders: { cookie, userAgent } });
+      // Pick a fresh account for the waiter (may be different from the released one)
+      const waiterEmail = accountEmail || pickAccount()?.email;
+      Promise.all([getBasicHeaders(waiterEmail), this.createSession(waiterEmail)])
+        .then(([{ cookie, userAgent, email: actualEmail }, id]) => {
+          waiter({ chatId: id, parentId: _newParentId, inUse: true, cachedHeaders: { cookie, userAgent }, accountEmail: actualEmail || waiterEmail });
         })
         .catch(err => {
           console.error('[SessionPool] Failed to create session for waiter:', err.message);
@@ -48,10 +68,10 @@ export class SessionPool {
     }
     this.activeSessions.delete(chatId);
     if (this.activeCount > 0) this.activeCount--;
-    this.deleteSession(chatId, cachedHeaders);
+    this.deleteSession(chatId, cachedHeaders, accountEmail);
   }
 
-  async deleteSession(chatId: string, cachedHeaders?: { cookie: string; userAgent: string }): Promise<void> {
+  async deleteSession(chatId: string, cachedHeaders?: { cookie: string; userAgent: string }, accountEmail?: string): Promise<void> {
     if (process.env.TEST_MOCK_PLAYWRIGHT) return;
     if (process.env.DELETE_SESSION === 'false') {
       console.log(`[SessionPool] DELETE_SESSION=false, keeping ${chatId.substring(0, 8)}...`);
@@ -60,7 +80,7 @@ export class SessionPool {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
-      const { cookie, userAgent } = cachedHeaders || await getBasicHeaders();
+      const { cookie, userAgent } = cachedHeaders || await getBasicHeaders(accountEmail);
       const response = await fetch(`https://chat.qwen.ai/api/v2/chats/${chatId}`, {
         method: 'DELETE',
         signal: controller.signal,
@@ -96,8 +116,8 @@ export class SessionPool {
     };
   }
 
-  private async createSession(): Promise<string> {
-    const { cookie, userAgent } = await getBasicHeaders();
+  private async createSession(email?: string): Promise<string> {
+    const { cookie, userAgent } = await getBasicHeaders(email);
     const response = await fetch('https://chat.qwen.ai/api/v2/chats/new', {
       method: 'POST',
       headers: {
