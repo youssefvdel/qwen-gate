@@ -10,6 +10,7 @@ import type { ParsedToolCall, ToolCallResult, ToolContext } from './types.ts';
 import { SchemaValidationError } from './schema.ts';
 import { registry } from './registry.ts';
 import { robustParseJSON } from '../utils/json.ts';
+import { validateToolCalls } from './guard.ts';
 
 export interface ExecutionLoopConfig {
   maxTurns?: number;
@@ -207,6 +208,22 @@ export async function runExecutionLoop(
       return effectiveContent || '';
     }
 
+    // ── Guard: validate tool calls before execution ────────────────
+    const guardResult = validateToolCalls(effectiveToolCalls, response.content || '');
+
+    if (!guardResult.ok) {
+      if (debug) {
+        console.log('[executor] Tool call validation FAILED:', guardResult.errors);
+      }
+      // Send correction prompt back to model instead of executing
+      messages.push(buildAssistantToolCallMessage(effectiveContent, effectiveToolCalls));
+      messages.push({
+        role: 'system',
+        content: guardResult.correctionPrompt,
+      });
+      continue;
+    }
+
     const context: ToolContext = {
       messages,
       turn,
@@ -215,14 +232,14 @@ export async function runExecutionLoop(
 
     if (debug) {
       console.log(
-        `[executor] Executing ${effectiveToolCalls.length} tool calls:`,
-        effectiveToolCalls.map((tc) => tc.name)
+        `[executor] Executing ${guardResult.valid.length} tool calls:`,
+        guardResult.valid.map((tc) => tc.name)
       );
     }
 
-    const toolResults = await executeToolCalls(effectiveToolCalls, context);
+    const toolResults = await executeToolCalls(guardResult.valid, context);
 
-    messages.push(buildAssistantToolCallMessage(effectiveContent, effectiveToolCalls));
+    messages.push(buildAssistantToolCallMessage(effectiveContent, guardResult.valid));
 
     for (const result of toolResults) {
       messages.push(buildToolMessage(result));
