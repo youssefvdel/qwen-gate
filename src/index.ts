@@ -8,6 +8,7 @@ import * as dotenv from 'dotenv';
 import { initPlaywright, activePage, BrowserType, getQwenHeaders } from './services/playwright.ts';
 import { networkInterfaces } from 'os';
 import { logStore } from './services/logStore.ts';
+import { logHtml } from './routes/logPage.ts';
 import { stream as honoStream } from 'hono/streaming';
 
 dotenv.config();
@@ -50,21 +51,23 @@ app.get('/health', (c) => {
 
 // Log viewer — shows recent client inputs and Qwen outputs
 app.get('/log', (c) => {
+  return c.html(logHtml);
+});
+
+app.get('/log/json', (c) => {
+  return c.json(logStore.getRecent(50));
+});
+
+app.get('/log/stream', (c) => {
   return honoStream(c, async (stream) => {
-    // Send existing entries
     for (const entry of logStore.getRecent(50)) {
       await stream.write(`data: ${JSON.stringify(entry)}\n\n`);
     }
-    // Subscribe to new entries
     const unsub = logStore.subscribe(async (entry) => {
       await stream.write(`data: ${JSON.stringify(entry)}\n\n`);
     });
     stream.onAbort(unsub);
   });
-});
-
-app.get('/log/json', (c) => {
-  return c.json(logStore.getRecent(50));
 });
 
 // OpenAI compatible routes
