@@ -9,11 +9,9 @@ import { robustParseJSON } from '../utils/json.ts';
 import { StreamingToolParser } from '../tools/parser.ts';
 import { validateSingleToolCall } from '../tools/guard.ts';
 import { filterContent } from '../utils/contentFilter.ts';
-import { RetryableQwenStreamError } from '../services/qwen.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import modelSpecs from '../models.json' with { type: 'json' };
 import { logStore } from '../services/logStore.ts';
-import { isRetryable } from '../utils/retry.ts';
 
 // Debug logging — enabled via DEBUG=true env var
 function logDebug(label: string, data: any) {
