@@ -32,6 +32,14 @@ const MAX_BUFFER_SIZE = 65536;
 const TRIM_KEEP_CONTEXT = 4096;
 /** Maximum search distance backward from "name" to find opening brace */
 const MAX_BRACE_SEARCH_DISTANCE = 500;
+/**
+ * Circuit breaker: maximum tool calls extracted per response.
+ * If the model vomits 30+ recursive tool calls (see output-problems/07.md),
+ * we stop extracting and treat the rest as plain text. This prevents the
+ * client from being flooded with tool_call events and the model from entering
+ * an infinite self-referential loop.
+ */
+export const MAX_TOOL_CALLS_PER_RESPONSE = 25;
 
 export class StreamingToolParser {
   private buffer = '';
@@ -67,6 +75,18 @@ export class StreamingToolParser {
     let offset = 0;
 
     while (offset < this.buffer.length) {
+      // ── Circuit breaker: stop extracting tool calls after limit ─────────
+      // When the model generates dozens of recursive tool calls (e.g., reading
+      // its own source files in a loop), we halt extraction and emit the
+      // remainder as plain text. This prevents infinite tool emission.
+      if (this.emittedCount >= MAX_TOOL_CALLS_PER_RESPONSE) {
+        if (this.textEmissionBoundary < this.buffer.length) {
+          result.text += this.buffer.substring(this.textEmissionBoundary);
+          this.textEmissionBoundary = this.buffer.length;
+        }
+        break;
+      }
+
       // ── Handle <think> / <thinking> blocks ─────────────────────────────
       const thinkResult = this.extractThinkBlock(offset);
       if (thinkResult) {
@@ -115,8 +135,21 @@ export class StreamingToolParser {
       if (isArray) {
         const arrayResult = this.extractArrayToolCalls(jsonStart);
         if (arrayResult) {
-          result.toolCalls.push(...arrayResult.toolCalls);
-          this.emittedCount += arrayResult.toolCalls.length;
+          // Circuit breaker: cap array extraction at remaining budget
+          const budget = MAX_TOOL_CALLS_PER_RESPONSE - this.emittedCount;
+          if (budget <= 0) {
+            // Over limit — emit as text
+            if (this.textEmissionBoundary < this.buffer.length) {
+              result.text += this.buffer.substring(this.textEmissionBoundary);
+              this.textEmissionBoundary = this.buffer.length;
+            }
+            break;
+          }
+          const extracted = arrayResult.toolCalls.slice(0, budget);
+          result.toolCalls.push(...extracted);
+          this.emittedCount += extracted.length;
+          // If array had more than budget, we still advance past the whole array
+          // but only emit up to budget tool calls
           offset = arrayResult.endOffset;
           this.textEmissionBoundary = offset;
           continue;
@@ -397,6 +430,13 @@ export class StreamingToolParser {
 
       // Try one final pass to extract tool calls from remaining buffer
       while (true) {
+        // Circuit breaker: stop extracting if at limit
+        if (this.emittedCount >= MAX_TOOL_CALLS_PER_RESPONSE) {
+          result.text += remaining;
+          remaining = '';
+          break;
+        }
+
         const braceIdx = remaining.indexOf('{');
         if (braceIdx === -1) break;
 

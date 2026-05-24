@@ -5,7 +5,7 @@ import { createQwenStream } from '../services/qwen.ts';
 import { OpenAIRequest, Message } from '../utils/types.ts';
 import type { FunctionToolDefinition } from '../tools/types.ts';
 import { robustParseJSON } from '../utils/json.ts';
-import { StreamingToolParser } from '../tools/parser.ts';
+import { StreamingToolParser, MAX_TOOL_CALLS_PER_RESPONSE } from '../tools/parser.ts';
 import { validateSingleToolCall } from '../tools/guard.ts';
 import { filterContent, stripToolCallArtifacts } from '../utils/contentFilter.ts';
 import { sessionPool } from '../services/sessionPool.ts';
@@ -435,6 +435,7 @@ export async function chatCompletions(c: Context) {
       if (!cleanOutput) toolParser.skipPreProcess = true;
       const toolCallsOut: any[] = [];
       const correctionPrompts: string[] = []; // Guard rejection messages for logging
+      let toolCallLimitReached = false;
 
       let buffer = '';
       let completionTokens = 0;
@@ -442,6 +443,9 @@ export async function chatCompletions(c: Context) {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+
+        // Circuit breaker: if tool call limit hit, stop consuming upstream
+        if (toolCallLimitReached) break;
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
@@ -566,12 +570,28 @@ export async function chatCompletions(c: Context) {
                     logDebug('PARSED TOOL CALL', { name: tc.name, arguments: tc.arguments });
                   }
                 }
+
+                // Circuit breaker: check if parser hit the tool call limit
+                if (toolParser.getEmittedToolCallCount() >= MAX_TOOL_CALLS_PER_RESPONSE) {
+                  console.error(
+                    `[Chat][TOOL CALL LIMIT] Non-streaming: ${toolParser.getEmittedToolCallCount()} tool calls emitted, ` +
+                    `stopping consumption. account=${resolvedEmail} model=${body.model}`
+                  );
+                  logStore.updateEntry(logId, entry => {
+                    entry.errors.push(`Tool call limit reached (${MAX_TOOL_CALLS_PER_RESPONSE}). Stopped consumption.`);
+                  });
+                  toolCallLimitReached = true;
+                  break;
+                }
               }
             }
           } catch (e) {
             console.debug('[Chat] Non-streaming: parse error on chunk, ignoring partial:', (e as Error)?.message);
           }
         }
+
+        // Break outer while(true) if limit hit inside for-loop
+        if (toolCallLimitReached) break;
       }
 
       const upstreamError = parseQwenErrorPayload(buffer);
@@ -740,6 +760,7 @@ export async function chatCompletions(c: Context) {
       const toolParser = new StreamingToolParser();
       if (!toolCalling) toolParser.passThrough = true;
       if (!cleanOutput) toolParser.skipPreProcess = true;
+      let toolCallLimitReached = false;
 
       let buffer = '';
       let completionTokens = 0;
@@ -755,6 +776,8 @@ export async function chatCompletions(c: Context) {
       while (true) {
         if (streamDone) break;
         if (c.req.raw?.signal?.aborted) { reader.cancel(); break; }
+        // Circuit breaker: stop consuming upstream if tool call limit hit
+        if (toolCallLimitReached) { reader.cancel(); break; }
 
         let done: boolean;
         let value: Uint8Array | undefined;
@@ -1045,6 +1068,28 @@ export async function chatCompletions(c: Context) {
                   });
                 }
 
+                // Circuit breaker: check if parser hit the tool call limit
+                if (!toolCallLimitReached && toolParser.getEmittedToolCallCount() >= MAX_TOOL_CALLS_PER_RESPONSE) {
+                  console.error(
+                    `[Chat][TOOL CALL LIMIT] Streaming: ${toolParser.getEmittedToolCallCount()} tool calls emitted, ` +
+                    `stopping consumption. account=${resolvedEmail} model=${body.model}`
+                  );
+                  logStore.updateEntry(logId, entry => {
+                    entry.errors.push(`Tool call limit reached (${MAX_TOOL_CALLS_PER_RESPONSE}). Stopped stream consumption.`);
+                  });
+                  toolCallLimitReached = true;
+                  // Emit a text message informing the client that the limit was hit
+                  await writeEvent({
+                    id: completionId,
+                    object: 'chat.completion.chunk',
+                    created: Math.floor(Date.now() / 1000),
+                    model: body.model,
+                    choices: [makeChoice({
+                      content: `\n\n[Tool call limit reached: ${MAX_TOOL_CALLS_PER_RESPONSE} tool calls emitted. Response truncated to prevent runaway output.]`
+                    })]
+                  });
+                }
+
                 // Only send text if all tool calls passed guard validation.
                 // If any failed, suppress the text to prevent polluting client context.
                 if (pendingText && allToolCallsValid && cleanedText) {
@@ -1230,7 +1275,9 @@ export async function chatCompletions(c: Context) {
         prompt_tokens_details: { cached_tokens: 0 }
       };
   
-      const finalFinishReason = toolParser.getEmittedToolCallCount() > 0 ? 'tool_calls' : 'stop';
+      const finalFinishReason = toolCallLimitReached
+        ? 'stop'  // Limit hit: treat as stop, not tool_calls (prevents client re-invoking)
+        : toolParser.getEmittedToolCallCount() > 0 ? 'tool_calls' : 'stop';
   
       await writeEvent({
         id: completionId,
