@@ -572,7 +572,7 @@ export async function chatCompletions(c: Context) {
 
     c.header('Content-Type', 'text/event-stream');
     c.header('Cache-Control', 'no-cache');
-    c.header('Connection', 'keep-alive');
+    c.header('Connection', 'close'); // Close TCP socket when response ends — don't keep alive
 
     return honoStream(c, async (streamWriter: any) => {
       let heartbeatInterval: any;
@@ -631,11 +631,26 @@ export async function chatCompletions(c: Context) {
       let promptTokens = Math.ceil(finalPrompt.length / 3.5);
       let streamDone = false;
 
+      // ── Diagnostic timestamps for stream close investigation ──
+      let lastChunkAt = 0;       // last time reader.read() returned data
+      let upstreamDoneAt = 0;    // when reader returned done: true (TCP close)
+      let qwenDoneSignalAt = 0;  // when 'data: [DONE]' seen in SSE from Qwen
+      let firstChunkAt = 0;
+      let totalChunks = 0;
+
       while (true) {
         if (streamDone) break;
         if (c.req.raw?.signal?.aborted) { reader.cancel(); break; }
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          upstreamDoneAt = Date.now();
+          console.log(`[Chat][timing] upstream reader done=true. lastChunk=${lastChunkAt ? ((upstreamDoneAt - lastChunkAt) + 'ms after last chunk') : 'never got chunk'}. totalChunks=${totalChunks}`);
+          break;
+        }
+        const now = Date.now();
+        if (!firstChunkAt) firstChunkAt = now;
+        lastChunkAt = now;
+        totalChunks++;
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
@@ -648,6 +663,8 @@ export async function chatCompletions(c: Context) {
           const dataStr = trimmed.slice(6);
           if (dataStr === '[DONE]') {
             streamDone = true;
+            qwenDoneSignalAt = Date.now();
+            console.log(`[Chat][timing] Qwen sent data: [DONE]. lastChunk=${(qwenDoneSignalAt - lastChunkAt)}ms ago. streamAge=${(qwenDoneSignalAt - firstChunkAt)}ms`);
             break;
           }
 
@@ -964,22 +981,33 @@ export async function chatCompletions(c: Context) {
           usage
         });
       }
+      const doneWriteAt = Date.now();
+      console.log(`[Chat][timing] Writing data: [DONE] to client. sinceLastChunk=${lastChunkAt ? (doneWriteAt - lastChunkAt) + 'ms' : 'N/A'} sinceUpstreamDone=${upstreamDoneAt ? (doneWriteAt - upstreamDoneAt) + 'ms' : 'N/A (never done=true)'} sinceQwenDone=${qwenDoneSignalAt ? (doneWriteAt - qwenDoneSignalAt) + 'ms' : 'N/A (never sent [DONE])'} totalChunks=${totalChunks}`);
       await streamWriter.write('data: [DONE]\n\n');
+      console.log(`[Chat][timing] data: [DONE] written (await resolved). writeTook=${Date.now() - doneWriteAt}ms`);
 
-      // Release the upstream reader to close the TCP connection to Qwen.
-      // Without this, the connection stays open until GC collects the reader.
-      try { reader.cancel(); } catch {}
-      try { reader.releaseLock(); } catch {}
+      // Capture cleanup refs for deferred background cleanup.
+      // DO NOT do anything else here — callback must return ASAP so Hono
+      // flushes [DONE] and closes the HTTP response. Client disconnects immediately.
+      const _cleanupReader = reader;
+      const _cleanupInterval = heartbeatInterval;
+      const _cleanupChatId = session.chatId;
+      const _cleanupParentId = nextParentId;
+      const _cleanupHeaders = sessionHeaders;
+      const _cleanupEmail = resolvedEmail;
 
-      // Explicitly close the stream writer so the HTTP response ends immediately.
-      // Without this, Hono buffers the final [DONE] until the callback resolves,
-      // causing the client to hang waiting for connection close.
-      clearInterval(heartbeatInterval);
-      try { await streamWriter.close(); } catch {}
+      // 200ms delay ensures the HTTP response is fully flushed and TCP FIN is sent
+      // before any background work competes for event loop time.
+      setTimeout(() => {
+        clearInterval(_cleanupInterval);
+        try { _cleanupReader.cancel(); } catch {}
+        try { _cleanupReader.releaseLock(); } catch {}
+        sessionPool.release(_cleanupChatId, _cleanupParentId, _cleanupHeaders, _cleanupEmail);
+      }, 200);
 
       } finally {
-        clearInterval(heartbeatInterval); // redundant but safe if early error
-        sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail);
+        clearInterval(heartbeatInterval);
+        console.log(`[Chat][timing] Callback returning. Hono will close HTTP response now. totalChunks=${totalChunks}`);
       }
     });
   } catch (err: any) {
