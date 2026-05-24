@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import modelSpecs from '../models.json' with { type: 'json' };
 import { withRetry } from '../utils/retry.ts';
 import { throttleAccount, pickAccount } from './auth.ts';
+import { createNetworkEntry, recordResponse, recordStreamChunk, completeEntry, errorEntry } from './networkDebug.ts';
 
 export class RetryableQwenStreamError extends Error {
   readonly retryAfterMs: number;
@@ -79,41 +80,56 @@ export async function disableNativeTools(): Promise<void> {
     return;
   }
   disablingNativeToolsInProgress = (async () => {
+    let settingsDebugId: string | null = null;
     try {
       const { headers } = await getQwenHeaders();
       const payload = {
         tools_enabled: {
           web_extractor: false, web_search_image: false, web_search: false,
           image_gen_tool: false, code_interpreter: false, history_retriever: false,
-          image_edit_tool: false, bio: false, image_zoom_in_tool: false
+          image_edit_tool: false, bio: false, image_zoom_in_tool: false,
+          image_search: false
         }
       };
       console.log('[Qwen] Disabling native tools...');
+      const settingsHeaders: Record<string, string> = {
+        'accept': 'application/json, text/plain, */*',
+        'accept-language': 'pt-BR,pt;q=0.9',
+        'content-type': 'application/json',
+        'cookie': headers['cookie'],
+        'origin': 'https://chat.qwen.ai',
+        'referer': 'https://chat.qwen.ai/',
+        'user-agent': headers['user-agent'],
+        'x-request-id': uuidv4(),
+        'bx-ua': headers['bx-ua'],
+        'bx-umidtoken': headers['bx-umidtoken'],
+        'bx-v': headers['bx-v']
+      };
+      const settingsDebugEntry = createNetworkEntry({
+        url: 'https://chat.qwen.ai/api/v2/users/user/settings/update',
+        method: 'POST',
+        headers: settingsHeaders,
+        body: payload,
+        category: 'settings',
+      });
+      settingsDebugId = settingsDebugEntry.id;
       const response = await fetch('https://chat.qwen.ai/api/v2/users/user/settings/update', {
         method: 'POST',
-        headers: {
-          'accept': 'application/json, text/plain, */*',
-          'accept-language': 'pt-BR,pt;q=0.9',
-          'content-type': 'application/json',
-          'cookie': headers['cookie'],
-          'origin': 'https://chat.qwen.ai',
-          'referer': 'https://chat.qwen.ai/',
-          'user-agent': headers['user-agent'],
-          'x-request-id': uuidv4(),
-          'bx-ua': headers['bx-ua'],
-          'bx-umidtoken': headers['bx-umidtoken'],
-          'bx-v': headers['bx-v']
-        },
+        headers: settingsHeaders,
         body: JSON.stringify(payload)
       });
+      recordResponse(settingsDebugId, response);
       if (!response.ok) {
         const text = await response.text();
         console.error(`[Qwen] Failed to disable native tools: ${response.status} - ${text}`);
+        completeEntry(settingsDebugId);
       } else {
         console.log('[Qwen] Native tools disabled successfully.');
         nativeToolsDisabled = true;
+        completeEntry(settingsDebugId);
       }
     } catch (err: any) {
+      if (settingsDebugId) errorEntry(settingsDebugId, err.message);
       console.error(`[Qwen] Error disabling native tools: ${err.message}`);
     } finally {
       disablingNativeToolsInProgress = null;
@@ -132,21 +148,31 @@ export async function fetchQwenModels(): Promise<any[]> {
   
   let lastErr: Error | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {
+    let modelsDebugId: string | null = null;
     try {
       if (attempt > 0) await new Promise(r => setTimeout(r, 500 * attempt));
-      const response = await fetch('https://chat.qwen.ai/api/models', {
-        headers: {
-          'accept': 'application/json, text/plain, */*',
-          'accept-language': 'pt-BR,pt;q=0.9',
-          'cookie': cookie,
-          'referer': 'https://chat.qwen.ai/',
-          'user-agent': userAgent,
-          'x-request-id': uuidv4(),
-          'bx-v': bxV,
-          'timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
-          'source': 'web'
-        }
+      const modelsHeaders: Record<string, string> = {
+        'accept': 'application/json, text/plain, */*',
+        'accept-language': 'pt-BR,pt;q=0.9',
+        'cookie': cookie,
+        'referer': 'https://chat.qwen.ai/',
+        'user-agent': userAgent,
+        'x-request-id': uuidv4(),
+        'bx-v': bxV,
+        'timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+        'source': 'web'
+      };
+      const modelsDebugEntry = createNetworkEntry({
+        url: 'https://chat.qwen.ai/api/models',
+        method: 'GET',
+        headers: modelsHeaders,
+        category: 'models',
       });
+      modelsDebugId = modelsDebugEntry.id;
+      const response = await fetch('https://chat.qwen.ai/api/models', {
+        headers: modelsHeaders
+      });
+      recordResponse(modelsDebugId, response);
 
       if (!response.ok) {
         throw new Error(`Failed to fetch models from Qwen: ${response.status} ${response.statusText}`);
@@ -179,10 +205,13 @@ export async function fetchQwenModels(): Promise<any[]> {
 
     cachedModels = extendedModels;
     lastModelsFetch = now;
+    completeEntry(modelsDebugId);
     return extendedModels;
   }
+      completeEntry(modelsDebugId);
       return [];
     } catch (err: any) {
+      if (modelsDebugId) errorEntry(modelsDebugId, err.message);
       lastErr = err;
     }
   }
@@ -270,31 +299,52 @@ export async function createQwenStream(
 
   // Track which account is being used — passed to getQwenHeaders for token injection
   let currentAccountEmail = accountEmail;
+  let lastDebugEntryId: string | null = null;
 
   const makeRequest = async (): Promise<{ response: Response; headers: Record<string, string> }> => {
     const { headers: reqHeaders } = await getQwenHeaders(false, currentAccountEmail);
-    const response = await fetch(url, {
+    const requestHeaders: Record<string, string> = {
+      'accept': 'application/json',
+      'accept-language': 'pt-BR,pt;q=0.9',
+      'content-type': 'application/json',
+      'cookie': reqHeaders['cookie'],
+      'origin': 'https://chat.qwen.ai',
+      'referer': chatId ? `https://chat.qwen.ai/c/${chatId}` : 'https://chat.qwen.ai/',
+      'sec-fetch-dest': 'empty',
+      'sec-fetch-mode': 'cors',
+      'sec-fetch-site': 'same-origin',
+      'timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+      'user-agent': reqHeaders['user-agent'],
+      'x-accel-buffering': 'no',
+      'x-request-id': uuidv4(),
+      'bx-ua': reqHeaders['bx-ua'],
+      'bx-umidtoken': reqHeaders['bx-umidtoken'],
+      'bx-v': reqHeaders['bx-v']
+    };
+    const debugEntry = createNetworkEntry({
+      url,
       method: 'POST',
-      headers: {
-        'accept': 'application/json',
-        'accept-language': 'pt-BR,pt;q=0.9',
-        'content-type': 'application/json',
-        'cookie': reqHeaders['cookie'],
-        'origin': 'https://chat.qwen.ai',
-        'referer': chatId ? `https://chat.qwen.ai/c/${chatId}` : 'https://chat.qwen.ai/',
-        'sec-fetch-dest': 'empty',
-        'sec-fetch-mode': 'cors',
-        'sec-fetch-site': 'same-origin',
-        'timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
-        'user-agent': reqHeaders['user-agent'],
-        'x-accel-buffering': 'no',
-        'x-request-id': uuidv4(),
-        'bx-ua': reqHeaders['bx-ua'],
-        'bx-umidtoken': reqHeaders['bx-umidtoken'],
-        'bx-v': reqHeaders['bx-v']
-      },
-      body: JSON.stringify(payload)
+      headers: requestHeaders,
+      body: payload,
+      category: 'chat',
+      accountEmail: currentAccountEmail,
     });
+    lastDebugEntryId = debugEntry.id;
+
+    try {
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: requestHeaders,
+        body: JSON.stringify(payload)
+      });
+    } catch (fetchErr: unknown) {
+      const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+      errorEntry(debugEntry.id, msg);
+      throw fetchErr;
+    }
+    recordResponse(debugEntry.id, response);
 
     if (!response.ok || !response.body) {
       const errText = await response.text().catch(() => '');
@@ -306,6 +356,7 @@ export async function createQwenStream(
           if (errorJson?.data?.details?.includes('chat is in progress') ||
               errorJson?.data?.details?.includes('The chat is in progress')) {
             const retryAfterMs = 2000 + Math.floor(Math.random() * 2000);
+            errorEntry(debugEntry.id, errorJson.data.details);
             throw new RetryableQwenStreamError(
               `Qwen: ${errorJson.data.details}`,
               retryAfterMs,
@@ -335,6 +386,7 @@ export async function createQwenStream(
             else if (code === 'Not_Found') status = 404;
             else if (code === 'UpstreamError') status = 502;
             else status = 502;
+            errorEntry(debugEntry.id, `${code}: ${details}`);
             throw new QwenUpstreamError(
               `Qwen upstream error: ${code}: ${details}.${wait}`,
               code,
@@ -344,6 +396,7 @@ export async function createQwenStream(
           if (errorJson?.data?.details?.includes('is not exist') ||
               errorJson?.data?.details?.includes('not exist') ||
               errorJson?.data?.details?.includes('does not exist')) {
+            errorEntry(debugEntry.id, errorJson.data.details);
             throw new RetryableQwenStreamError(
               `Qwen: ${errorJson.data.details}`,
               0,
@@ -363,6 +416,10 @@ export async function createQwenStream(
     }
 
     return { response, headers: reqHeaders };
+    } catch (err) {
+      errorEntry(debugEntry.id, err instanceof Error ? err.message : String(err));
+      throw err;
+    }
   };
 
   let result: { response: Response; headers: Record<string, string> };
@@ -377,5 +434,23 @@ export async function createQwenStream(
     throw new Error(`Qwen returned empty response body (status ${result.response.status})`);
   }
 
-  return { stream: result.response.body, headers: result.headers, uiSessionId: chatId || '', accountEmail: currentAccountEmail };
+  const streamDebugEntryId = lastDebugEntryId;
+  const textDecoder = new TextDecoder();
+  const wrappedStream = result.response.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        if (streamDebugEntryId) {
+          recordStreamChunk(streamDebugEntryId, textDecoder.decode(chunk, { stream: true }));
+        }
+        controller.enqueue(chunk);
+      },
+      flush() {
+        if (streamDebugEntryId) {
+          completeEntry(streamDebugEntryId);
+        }
+      }
+    })
+  );
+
+  return { stream: wrappedStream, headers: result.headers, uiSessionId: chatId || '', accountEmail: currentAccountEmail };
 }

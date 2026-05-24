@@ -1,0 +1,590 @@
+{
+  "settingsRequests": [
+    {
+      "url": "https://chat.qwen.ai/settings/personalization",
+      "method": "GET",
+      "body": "",
+      "timestamp": "2026-05-24T09:12:47.261Z"
+    },
+    {
+      "url": "https://arms-retcode.aliyuncs.com/r.png?t=pv&times=1&page=chat.qwen.ai%2Fsettings%2Fpersonalization&tag=imp-web-rtc&release=imp-web-rtc_7.1.9&environment=prod&begin=1779613972206&c1=chat.qwen.ai&c2=0.23.0&uid=ILmj7ptmg8zuj2iFIzRz3L38wtL9&dt=Qwen%20Studio&dr=&dpr=1.00&de=utf-8&ul=en&sr=1280x720&vp=1280x720&ct=4g&sid=Rkmgdp76jdvkIy7q7lgk65y72p98&pid=e1iftji1w7%407ec1cef2cc88733&_v=1.8.36-beta.12&pv_id=qemILpIUjzwkwU764kpXyC4a7dX7&sampling=1&dl=https%3A%2F%2Fchat.qwen.ai%2Fsettings%2Fpersonalization&z=mpjk7ky9",
+      "method": "HEAD",
+      "body": "",
+      "timestamp": "2026-05-24T09:12:52.216Z"
+    },
+    {
+      "url": "https://pagead2.googlesyndication.com/ccm/collect?rcb=15&frm=0&en=page_view&dl=https%3A%2F%2Fchat.qwen.ai%2Fsettings%2Fpersonalization&scrsrc=www.googletagmanager.com&rnd=866398302.1779613972&navt=n&npa=1&gtm=45be65k1v9203647779za200zd9203647779xec&gcs=G100&gcd=13p3p3p3p5l1&dma_cps=-&dma=0&tag_exp=0~115938466~115938469&apve=1&apvf=f&apvc=1&tids=AW-11551851435&tid=AW-11551851435&tft=1779613972224&tfd=4967",
+      "method": "POST",
+      "body": "",
+      "timestamp": "2026-05-24T09:12:52.226Z"
+    },
+    {
+      "url": "https://pagead2.googlesyndication.com/pagead/conversion/11551851435/?random=1779613972228&cv=11&fst=1779613972228&fmt=8&bg=ffffff&guid=ON&async=1&en=page_view&gtm=45be65k1v9203647779za200zd9203647779xec&gcs=G100&gcd=13p3p3p3p5l1&dma_cps=-&dma=0&tag_exp=0~115938466~115938469&u_w=1280&u_h=720&url=https%3A%2F%2Fchat.qwen.ai%2Fsettings%2Fpersonalization&rcb=15&gtm_ee=1&frm=0&tiba=Qwen%20Studio&npa=1&pscdl=denied&label=ov1_CJCZ_7gbEKuHrYQr&hn=www.googleadservices.com&uaa=x86&uab=64&uafvl=Chromium%3B148.0.7778.96%7CHeadlessChrome%3B148.0.7778.96%7CNot%252FA)Brand%3B99.0.0.0&uamb=0&uam=&uap=Windows&uapv=10.0&uaw=0&data=event%3Dgtag.config&category=acrcp_v1_512",
+      "method": "POST",
+      "body": "",
+      "timestamp": "2026-05-24T09:12:52.234Z"
+    },
+    {
+      "url": "https://chat.qwen.ai/api/v2/users/status",
+      "method": "POST",
+      "body": "{\"typarms\":{\"logId\":\"b7bb266045a1e0ec05f8e9d8561d1bf7c50f\",\"timestamp\":1779613972306,\"domain\":\"chat.qwen.ai\",\"testTag\":\"compareLogService\",\"testVersion\":\"5.0.0\",\"serviceName\":\"tongyiLogService\",\"requestType\":\"sendBeacon\"}}",
+      "timestamp": "2026-05-24T09:12:52.316Z"
+    },
+    {
+      "url": "https://aplus.qwen.ai/aplus.monitor.load_cna_success?gmkey=OTHER&gokey=spm-url%3D%26spm-pre%3D%26spm-cnt%3D0.0.0.0.11f755fbDjl2fq%26_f_t%3Dfalse%26pid%3Dchat_qwen_ai%26loadUrl%3Dhttps%3A%2F%2Faplus.qwen.ai%2Feg.js%26loadType%3Dasync%26actualDuration%3D426%26cache%3Dc0376bd%26jsver%3Daplus.js%26lver%3D1.13.26%26customSdkId%3D%26platformType%3Dpc%26device_model%3DWindows%26os%3DWindows%26os_version%3Dwin10%26language%3Den-US%26o%3Dwin10%26w%3Dwebkit%26s%3D1280x720%26scr%3D1280x720%26m%3D360ee%26ism%3Dpc%26p%3D1%26b%3Dchrome130%26tag%3D1%26stag%3D-1%26lstag%3D-1%26_g_encode%3Dutf-8&cna=LC6XIh9pow4CAZqwqfe0z3lc&spm-cnt=0.0.0.0.11f755fbDjl2fq&logtype=2&scr=1280x720&_p_url=https%3A%2F%2Fchat.qwen.ai%2Fsettings%2Fpersonalization",
+      "method": "GET",
+      "body": "",
+      "timestamp": "2026-05-24T09:12:52.739Z"
+    },
+    {
+      "url": "https://chat.qwen.ai/api/v2/users/user/settings",
+      "method": "GET",
+      "body": "",
+      "timestamp": "2026-05-24T09:12:53.743Z"
+    },
+    {
+      "url": "https://chat.qwen.ai/api/v2/users/status",
+      "method": "POST",
+      "body": "{\"typarms\":{\"typarm1\":\"web\",\"typarm2\":\"bad23c8f-24de-4773-82c3-941b00c3bba1\",\"typarm3\":\"prod\",\"typarm4\":\"qwen_chat\",\"typarm5\":\"product\",\"typarm6\":\"\",\"orgid\":\"tongyi\",\"share_id\":\"\",\"project_id\":\"\",\"channel_type\":\"\",\"community_type\":\"\",\"from_id\":\"\",\"cdn_version\":\"0.2.57\",\"spmId\":\"a2ty_o01.30233035\",\"aemPageId\":\"//chat.qwen.ai/settings/personalization\",\"domain\":\"chat.qwen.ai\"}}",
+      "timestamp": "2026-05-24T09:12:54.075Z"
+    },
+    {
+      "url": "https://chat.qwen.ai/api/v2/users/user/settings",
+      "method": "GET",
+      "body": "",
+      "timestamp": "2026-05-24T09:13:00.079Z"
+    },
+    {
+      "url": "https://chat.qwen.ai/api/v2/users/user",
+      "method": "GET",
+      "body": "",
+      "timestamp": "2026-05-24T09:13:00.405Z"
+    }
+  ],
+  "settingsResponses": [
+    {
+      "url": "https://chat.qwen.ai/settings/personalization",
+      "status": 200,
+      "body": "\r\n\n<!doctype html>\n<html lang=en translate=no style=background-color:#fff>\n<head>\n  \n  <script nonce=h3pnpozgv7IZrQ1DnqqdkA>!function(){var e=document.documentElement,t=window.matchMedia(\"(prefers-color-scheme: dark)\").matches,a=\"system\";try{a=localStorage.getItem(\"theme\")||\"system\"}catch(e){}var c=\"dark\"===a||\"system\"===a&&t;e.style.backgroundColor=c?\"#171717\":\"#ffffff\"}()</script>\n\n  \n  <script nonce=h3pnpozgv7IZrQ1DnqqdkA>function gtag(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],gtag(\"consent\",\"default\",{ad_storage:\"denied\",ad_user_data:\"denied\",ad_personalization:\"denied\",analytics_storage:\"denied\",wait_for_update:500,url_passthrough:!0,ads_data_redaction:!0})</script>\n\n  \n  <script nonce=h3pnpozgv7IZrQ1DnqqdkA async src=\"https://www.googletagmanager.com/gtag/js?id=AW-11551851435\"></script>\n  <script nonce=h3pnpozgv7IZrQ1DnqqdkA>function gtag(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],gtag(\"js\",new Date),gtag(\"config\",\"AW-11551851435\")</script>\n  \n  <script nonce=h3pnpozgv7IZrQ1DnqqdkA src=//o.alicdn.com/frontend-lib/common-lib/jquery.min.js captchaType=qwen></script>\n  <meta charset=utf-8>\n  <link rel=icon href=//assets.alicdn.com/g/qwenweb/qwen-chat-fe/0.2.57/favicon.png>\n  <link rel=apple-touch-icon href=//assets.alicdn.com/g/qwenweb/qwen-chat-fe/0.2.57/favicon.png>\n  <link rel=manifest href=//assets.alicdn.com/g/qwenweb/qwen-chat-fe/0.2.57/manifest.json crossorigin=anonymous>\n\n  <meta name=viewport content=\"width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover,user-scalable=no\">\n  <meta name=theme-color content=#171717>\n  <meta name=google content=notranslate>\n  <meta name=description content=\"Qwen Studio is an official platform from Qwen that empowers both everyday users and developers with unified access to Qwen’s series of open-source and proprietary models. It offers comprehensive functionality spanning chatbots, image and video understanding, image generation and editing, document processing, tool utilization, voice and video chat, and artifacts.\">\n  <meta name=keywords content=\"qwen, qwen ai, qwen 0.5b, alibaba qwen, qwen alibaba, qwen chatbot, alibaba qwen ai, @qwen, qwen ai login, open devin, opensource devin, code generation, ai code, ai ui design, ai web, qwen math, qwenlm, qwen chat, qwen 2.5, qwen2.5, qwen 2.5 coder, qwen 2.5 math, qwen vl, qwen2 vl, qwen2, qwq, qvq, chat qwen, qwen online, qwen app, qwen agent, ai agent, qwen turbo, chatpdf, chat pdf, doc summarizer, humanize ai free, ai humanize , free chat bot, humanize ai, bypass ai, wanx, deepl translate, undetectable ai, ai image, ai animate image, free image generation, humanize ai text, чат gpt, чат qwen, чат, best free image generation, free video generation, qwen gpt, free ai assistant, ai logo maker, humanize, rewrite text, summary generator, generate summary, pdf translate, ai code generator, ai coder, code agent, code artifacts, ai artifacts, humanize ai writing, prompt enhance, chat deep, open webui, lmstudio, ollama, qwen github, qwen hugging, qwen api, local qwen, local llm, qwen 72b, qwen 7b, qwen 32b, qwen 14b, best ai chat, best chat bot, cha gpt, chay gpt, ai chatting, qwen chatting, ai chat app, qwen chat gpt, live model chat, online model chat, voice chat, chatbot arena, qwen 3, qwen omni, 千问, 通义千问, 阿里云通义千问, ai对话, ai聊天, срфе, ؤاشف, chat ai online, talk ai, gpt чат онлайн, chat llm, chat ui, twitter roast, ai助手, 通义实验室, تبدیل پی دی اف به ورد, pdf翻译, cloud ai, free ai, ai cloud, chat login, ai website, ai chat gpt, free ai chat, chatgpt官网, meet qwen, 千问人工智能, gpt ai, gpt qwen, thinking model, QwQ, QwQ Preview, QwQ 32B, deep thinking, wan, wan 2.1, reasoning model, reasoning, deep search, game studio, qwen3, qwen code, qwen.ai, chatgpt login, character ai, ai chat, qwen-ai free, chat ai, gwen ai, gwen, seek deep, character ai free, mua ai, ai talk, talk to ai, ai friend, honeybot, o3 chat, ai talking, ai chats, google slides, ai chat online free, ai conversation, funbot, free kling, free hailuo, video generation, qwen2.5 max, qwen reasoning, deepseek v3, deep seek, deepseek r1, qwen 2.5 ai, qwen lm, chatbot online, qwen 2.5 max, deepsee ai, qwen max, ai chat online, ai online, albaba, deepseek chat, qwen deepseek, o3 mini, o3 mini high, r1 zero, ai, deepseek, ia, chat gpt, qwen2 5 max, chatgpt free, ai image generator, quen ai, claude ai, inteligencia artificial, gpt, midjourney, perplexity, grok ai, ia gratis, dall e, poly ai, deepseek ai, ia para crear imagenes, chat qwen ai, ai chatgpt, ai chatbot, playground ai, ai free, chatgpt ai, chatgpt online, chat qwenlm ai, qwenlm ai, ai image generator free, chat, midjourney ai, qwen 2.5 max ai, chat gpt free, image generator ai, ai picture generator, chat gtp, deep seek ai, inteligencia artificial gratis, qwen chat ai, chat deepseek, chat cpt, qwen ai chat, bing ai, chat qwenlm, chatgpt openai, chat openai, qwen 2.5 app, chatgpt gratis, google bard ai, free chat gpt, generador de imagenes ia, free ai image generato",
+      "timestamp": "2026-05-24T09:12:51.411Z"
+    },
+    {
+      "url": "https://pagead2.googlesyndication.com/pagead/conversion/11551851435/?random=1779613972228&cv=11&fst=1779613972228&fmt=8&bg=ffffff&guid=ON&async=1&en=page_view&gtm=45be65k1v9203647779za200zd9203647779xec&gcs=G100&gcd=13p3p3p3p5l1&dma_cps=-&dma=0&tag_exp=0~115938466~115938469&u_w=1280&u_h=720&url=https%3A%2F%2Fchat.qwen.ai%2Fsettings%2Fpersonalization&rcb=15&gtm_ee=1&frm=0&tiba=Qwen%20Studio&npa=1&pscdl=denied&label=ov1_CJCZ_7gbEKuHrYQr&hn=www.googleadservices.com&uaa=x86&uab=64&uafvl=Chromium%3B148.0.7778.96%7CHeadlessChrome%3B148.0.7778.96%7CNot%252FA)Brand%3B99.0.0.0&uamb=0&uam=&uap=Windows&uapv=10.0&uaw=0&data=event%3Dgtag.config&category=acrcp_v1_512",
+      "status": 204,
+      "body": "",
+      "timestamp": "2026-05-24T09:12:52.392Z"
+    },
+    {
+      "url": "https://aplus.qwen.ai/aplus.monitor.load_cna_success?gmkey=OTHER&gokey=spm-url%3D%26spm-pre%3D%26spm-cnt%3D0.0.0.0.11f755fbDjl2fq%26_f_t%3Dfalse%26pid%3Dchat_qwen_ai%26loadUrl%3Dhttps%3A%2F%2Faplus.qwen.ai%2Feg.js%26loadType%3Dasync%26actualDuration%3D426%26cache%3Dc0376bd%26jsver%3Daplus.js%26lver%3D1.13.26%26customSdkId%3D%26platformType%3Dpc%26device_model%3DWindows%26os%3DWindows%26os_version%3Dwin10%26language%3Den-US%26o%3Dwin10%26w%3Dwebkit%26s%3D1280x720%26scr%3D1280x720%26m%3D360ee%26ism%3Dpc%26p%3D1%26b%3Dchrome130%26tag%3D1%26stag%3D-1%26lstag%3D-1%26_g_encode%3Dutf-8&cna=LC6XIh9pow4CAZqwqfe0z3lc&spm-cnt=0.0.0.0.11f755fbDjl2fq&logtype=2&scr=1280x720&_p_url=https%3A%2F%2Fchat.qwen.ai%2Fsettings%2Fpersonalization",
+      "status": 200,
+      "body": "GIF89a\u0001\u0000\u0001\u0000�\u0001\u0000\u0000\u0000\u0000���!�\u0004\u0001\u0000\u0000\u0001\u0000,\u0000\u0000\u0000\u0000\u0001\u0000\u0001\u0000\u0000\u0002\u0002L\u0001\u0000;",
+      "timestamp": "2026-05-24T09:12:52.843Z"
+    },
+    {
+      "url": "https://chat.qwen.ai/api/v2/users/status",
+      "status": 200,
+      "body": "{\"success\":true,\"request_id\":\"54d81609-c3e7-4240-894f-d452db0b3fe7\",\"data\":true}",
+      "timestamp": "2026-05-24T09:12:52.985Z"
+    },
+    {
+      "url": "https://chat.qwen.ai/api/v2/users/user/settings",
+      "status": 200,
+      "body": "{\"success\":true,\"request_id\":\"df366eeb-bb06-45e2-95ba-501ffddcafec\",\"data\":{\"ui\":{\"notificationEnabled\":false,\"theme\":\"dark\",\"language\":\"\",\"chatBubble\":true,\"showUsername\":false,\"widescreenMode\":false,\"title\":{},\"autoTags\":true,\"largeTextAsFile\":true,\"splitLargeChunks\":false,\"scrollOnBranchChange\":true,\"responseAutoCopy\":false,\"models\":[\"qwen3.7-max\"]},\"mcp_remind\":true,\"mcp\":{\"code-interpreter\":false,\"fire-crawl\":false,\"amap\":false,\"image-generation\":false},\"memory\":{\"enable_memory\":false,\"enable_history_memory\":false,\"memory_version_reminder\":false},\"reminder\":{\"project_version_reminder\":true},\"tts_speaker\":{\"speaker\":\"\",\"description\":\"\",\"url\":\"\",\"gender\":\"\"},\"tts_speaker_v2\":{\"speaker\":\"Maia\",\"description\":\"A voice that blends intelligence and gentleness.\",\"url\":\"\",\"gender\":\"female\",\"is_personal\":false,\"speaker_id\":\"\",\"spk_name\":\"Maia\"},\"aipodcast\":{\"host\":\"\",\"guest\":\"\"},\"code_settings\":{\"custom_prompt\":null,\"diff_display\":\"split\",\"branch_format\":null,\"last_repo_choice\":null,\"last_branch_choice\":null},\"manage_cookies\":{\"strictly_necessary_cookies\":true,\"functional_cookies\":null,\"performance_cookies\":null,\"advertising_cookies\":false},\"personalization\":{\"name\":\"\",\"description\":\"\",\"style\":\"Default\",\"instruction\":\"Always think and reason in English. Never use Chinese. All output must be in English.\\n\\n## OUTPUT RULES\\n\\n### ALWAYS DO\\n1. Output tool calls as pure JSON: {\\\"name\\\": \\\"tool_name\\\", \\\"arguments\\\": {\\\"key\\\": \\\"value\\\"}}\\n2. Keep \\\"name\\\" as a string and \\\"arguments\\\" as a JSON object\\n3. Multiple tool calls on separate lines, one JSON per line\\n4. Text answers as plain text — no special formatting\\n5. Think internally — reasoning stays private\\n\\n### NEVER DO\\n1. NEVER output <tool_call>, <tool_use>, <function_call>, <function_calls>, <invoke>, <parameter>, <think>, <thinking>, <thought>, or any XML tags\\n2. NEVER wrap tool calls in markdown fences or XML\\n3. NEVER prefix answers with \\\"Thinking:\\\", \\\"I am evaluating\\\", \\\"Let me\\\", or reasoning text\\n4. NEVER output \\\"arguments\\\" as a JSON string — must be an object\\n5. NEVER output \\\"name\\\" as anything other than a string\\n\\n### BLOCKED — NEVER USE\\n<tool_call>{\\\"name\\\":\\\"read\\\",\\\"arguments\\\":{}}</tool_call>\\n<tool_use>{\\\"name\\\":\\\"read\\\",\\\"arguments\\\":{}}</tool_use>\\n<function_call>{\\\"name\\\":\\\"read\\\",\\\"arguments\\\":{}}</function_call>\\n<function_calls><invoke name=\\\"read\\\"><parameter name=\\\"path\\\">f.txt</parameter></invoke></function_calls>\\n```json\\\\n{\\\"name\\\":\\\"read\\\",\\\"arguments\\\":{}}\\\\n```\\n\\n### CORRECT\\n{\\\"name\\\":\\\"read_file\\\",\\\"arguments\\\":{\\\"path\\\":\\\"file.txt\\\"}}\\n{\\\"name\\\":\\\"bash\\\",\\\"arguments\\\":{\\\"command\\\":\\\"ls\\\"}}\",\"enable_for_new_chat\":true},\"tools_enabled\":{\"code_interpreter\":false,\"web_extractor\":false,\"web_search\":false,\"image_zoom_in_tool\":false,\"bio\":false,\"history_retriever\":false,\"image_edit_tool\":false,\"image_gen_tool\":false,\"web_search_image\":false,\"image_search\":true}}}",
+      "timestamp": "2026-05-24T09:12:54.095Z"
+    },
+    {
+      "url": "https://chat.qwen.ai/api/v2/users/status",
+      "status": 200,
+      "body": "{\"success\":true,\"request_id\":\"8760f962-3918-4b36-b872-fd3a66d30b8e\",\"data\":true}",
+      "timestamp": "2026-05-24T09:12:54.356Z"
+    },
+    {
+      "url": "https://chat.qwen.ai/api/v2/users/user/settings",
+      "status": 200,
+      "body": "{\"success\":true,\"request_id\":\"c199830c-bea2-4e93-9f2b-2acfeadfdf73\",\"data\":{\"ui\":{\"notificationEnabled\":false,\"theme\":\"dark\",\"language\":\"\",\"chatBubble\":true,\"showUsername\":false,\"widescreenMode\":false,\"title\":{},\"autoTags\":true,\"largeTextAsFile\":true,\"splitLargeChunks\":false,\"scrollOnBranchChange\":true,\"responseAutoCopy\":false,\"models\":[\"qwen3.7-max\"]},\"mcp_remind\":true,\"mcp\":{\"code-interpreter\":false,\"fire-crawl\":false,\"amap\":false,\"image-generation\":false},\"memory\":{\"enable_memory\":false,\"enable_history_memory\":false,\"memory_version_reminder\":false},\"reminder\":{\"project_version_reminder\":true},\"tts_speaker\":{\"speaker\":\"\",\"description\":\"\",\"url\":\"\",\"gender\":\"\"},\"tts_speaker_v2\":{\"speaker\":\"Maia\",\"description\":\"A voice that blends intelligence and gentleness.\",\"url\":\"\",\"gender\":\"female\",\"is_personal\":false,\"speaker_id\":\"\",\"spk_name\":\"Maia\"},\"aipodcast\":{\"host\":\"\",\"guest\":\"\"},\"code_settings\":{\"custom_prompt\":null,\"diff_display\":\"split\",\"branch_format\":null,\"last_repo_choice\":null,\"last_branch_choice\":null},\"manage_cookies\":{\"strictly_necessary_cookies\":true,\"functional_cookies\":null,\"performance_cookies\":null,\"advertising_cookies\":false},\"personalization\":{\"name\":\"\",\"description\":\"\",\"style\":\"Default\",\"instruction\":\"Always think and reason in English. Never use Chinese. All output must be in English.\\n\\n## OUTPUT RULES\\n\\n### ALWAYS DO\\n1. Output tool calls as pure JSON: {\\\"name\\\": \\\"tool_name\\\", \\\"arguments\\\": {\\\"key\\\": \\\"value\\\"}}\\n2. Keep \\\"name\\\" as a string and \\\"arguments\\\" as a JSON object\\n3. Multiple tool calls on separate lines, one JSON per line\\n4. Text answers as plain text — no special formatting\\n5. Think internally — reasoning stays private\\n\\n### NEVER DO\\n1. NEVER output <tool_call>, <tool_use>, <function_call>, <function_calls>, <invoke>, <parameter>, <think>, <thinking>, <thought>, or any XML tags\\n2. NEVER wrap tool calls in markdown fences or XML\\n3. NEVER prefix answers with \\\"Thinking:\\\", \\\"I am evaluating\\\", \\\"Let me\\\", or reasoning text\\n4. NEVER output \\\"arguments\\\" as a JSON string — must be an object\\n5. NEVER output \\\"name\\\" as anything other than a string\\n\\n### BLOCKED — NEVER USE\\n<tool_call>{\\\"name\\\":\\\"read\\\",\\\"arguments\\\":{}}</tool_call>\\n<tool_use>{\\\"name\\\":\\\"read\\\",\\\"arguments\\\":{}}</tool_use>\\n<function_call>{\\\"name\\\":\\\"read\\\",\\\"arguments\\\":{}}</function_call>\\n<function_calls><invoke name=\\\"read\\\"><parameter name=\\\"path\\\">f.txt</parameter></invoke></function_calls>\\n```json\\\\n{\\\"name\\\":\\\"read\\\",\\\"arguments\\\":{}}\\\\n```\\n\\n### CORRECT\\n{\\\"name\\\":\\\"read_file\\\",\\\"arguments\\\":{\\\"path\\\":\\\"file.txt\\\"}}\\n{\\\"name\\\":\\\"bash\\\",\\\"arguments\\\":{\\\"command\\\":\\\"ls\\\"}}\",\"enable_for_new_chat\":true},\"tools_enabled\":{\"code_interpreter\":false,\"web_extractor\":false,\"web_search\":false,\"image_zoom_in_tool\":false,\"bio\":false,\"history_retriever\":false,\"image_edit_tool\":false,\"image_gen_tool\":false,\"web_search_image\":false,\"image_search\":true}}}",
+      "timestamp": "2026-05-24T09:13:00.395Z"
+    }
+  ],
+  "pageData": {
+    "toggles": [
+      {
+        "label": "Reference saved memoriesQwen will save and reference memories when generating replies.",
+        "checked": null,
+        "ariaChecked": "false",
+        "role": "switch",
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "Reference the chat historyQwen will reference saved memory when generating responses.",
+        "checked": null,
+        "ariaChecked": "false",
+        "role": "switch",
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "Advanced",
+        "checked": null,
+        "ariaChecked": "false",
+        "role": "switch",
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "Web ScrapingSpecifically designed to access designated web links and extract, summarize, or analyze ",
+        "checked": null,
+        "ariaChecked": "false",
+        "role": "switch",
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "Image searchUsed to search the internet for image resources related to specific keywords, returning ",
+        "checked": null,
+        "ariaChecked": "false",
+        "role": "switch",
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "Web searchUsed to retrieve the latest text information, news, data, or specific knowledge from the i",
+        "checked": null,
+        "ariaChecked": "false",
+        "role": "switch",
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "Image generationCreate and generate entirely new images from scratch based on the user's textual des",
+        "checked": null,
+        "ariaChecked": "false",
+        "role": "switch",
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "Code InterpreterA built-in programming runtime environment that can execute code for complex calcula",
+        "checked": null,
+        "ariaChecked": "false",
+        "role": "switch",
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "Retrieve historical memoryUsed to quickly find, review, or extract previously mentioned key informat",
+        "checked": null,
+        "ariaChecked": "false",
+        "role": "switch",
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "Image editingModify existing images by adding or removing objects, changing styles, adjusting local ",
+        "checked": null,
+        "ariaChecked": "false",
+        "role": "switch",
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "Update memoryUsed to record, update, or manage the user's personal preferences, key facts, and long-",
+        "checked": null,
+        "ariaChecked": "false",
+        "role": "switch",
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "Local image enlargementUsed to zoom in or focus on specific regions of an image at high resolution t",
+        "checked": null,
+        "ariaChecked": "false",
+        "role": "switch",
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      },
+      {
+        "label": "",
+        "checked": null,
+        "ariaChecked": null,
+        "role": null,
+        "id": "",
+        "name": "",
+        "dataAttrs": {}
+      }
+    ],
+    "allText": [
+      "Settings",
+      "GeneralInterfaceModelsChatsPersonalizationAccountAbout",
+      "General",
+      "Interface",
+      "Models",
+      "Chats",
+      "Personalization",
+      "Account",
+      "About",
+      "MemoryManageReference saved memoriesQwen will save and reference memories when generating replies.Reference the chat historyQwen will reference saved memory when generating responses.",
+      "MemoryManage",
+      "Memory",
+      "Manage",
+      "Reference saved memoriesQwen will save and reference memories when generating replies.",
+      "Reference saved memories",
+      "Qwen will save and reference memories when generating replies.",
+      "Reference the chat historyQwen will reference saved memory when generating responses.",
+      "Reference the chat history",
+      "Qwen will reference saved memory when generating responses.",
+      "Customize QwenSettings",
+      "Customize Qwen",
+      "Manage CookiesManage",
+      "Manage Cookies",
+      "Advanced",
+      "Web ScrapingSpecifically designed to access designated web links and extract, summarize, or analyze specific content while ignoring irrelevant page elements.",
+      "Web Scraping",
+      "Specifically designed to access designated web links and extract, summarize, or analyze specific content while ignoring irrelevant page elements.",
+      "Image searchUsed to search the internet for image resources related to specific keywords, returning images, source links, descriptions, and other information.",
+      "Image search",
+      "Used to search the internet for image resources related to specific keywords, returning images, source links, descriptions, and other information.",
+      "Web searchUsed to retrieve the latest text information, news, data, or specific knowledge from the internet, helping users obtain real-time external information.",
+      "Web search",
+      "Used to retrieve the latest text information, news, data, or specific knowledge from the internet, helping users obtain real-time external information.",
+      "Image generationCreate and generate entirely new images from scratch based on the user's textual description (prompt).",
+      "Image generation",
+      "Create and generate entirely new images from scratch based on the user's textual description (prompt).",
+      "Code InterpreterA built-in programming runtime environment that can execute code for complex calculations, data analysis, chart plotting, or file processing.",
+      "Code Interpreter",
+      "A built-in programming runtime environment that can execute code for complex calculations, data analysis, chart plotting, or file processing.",
+      "Retrieve historical memoryUsed to quickly find, review, or extract previously mentioned key information, context, or user instructions from conversation history outside the current session.",
+      "Retrieve historical memory",
+      "Used to quickly find, review, or extract previously mentioned key information, context, or user instructions from conversation history outside the current session.",
+      "Image editingModify existing images by adding or removing objects, changing styles, adjusting local details, or performing image compositing.",
+      "Image editing",
+      "Modify existing images by adding or removing objects, changing styles, adjusting local details, or performing image compositing.",
+      "Update memory",
+      "Local image enlargementUsed to zoom in or focus on specific regions of an image at high resolution to observe details or provide a clearer local view for subsequent processing.",
+      "Local image enlargement",
+      "Used to zoom in or focus on specific regions of an image at high resolution to observe details or provide a clearer local view for subsequent processing."
+    ],
+    "reactState": null,
+    "scriptData": [
+      "/*! 2025-10-14 18:50:02 aplus_pc.js */\n!function(t){function e(a){if(n[a])return n[a].exports;var o=n[a]={exports:{},id:a,loaded:!1};return t[a].call(o.exports,o,o.exports,e),o.loaded=!0,o.exports}var n={};return e.m=t,e.c=n,e.p=\"\",e(0)}([function(t,e,n){t.exports=n(1)},function(t,e,n){\"use strict\";n(2).initGlobal(window),function(){var t=n(4);n(156)(t)}()},function(t,e,n){\"use strict\";var a,o=n(3),r=o.APLUS,i=o.APLUS_QUEUE,s=o.GOLDLOG,u=o.GOLDLOG_QUEUE,c=!1;try{\"undefined\"!=typeof window&&(a=window,c=!0)}catch(t){a={},c=!1}e.getContext=function(){return a},e.isWeb=function(){return\"undefined\"!=typeof window&&window},e.initGlobal=function(t){a=t?t:{v:1,aplus:{},aplus_queue:[]};var e,n;if(c)try{e=a.aplus||a.goldlog||(a.aplus={});var o=a.goldlog_queue||(a.goldlog_queue=[]);n=a.aplus_queue||(a.aplus_queue=[]),n=o.concat(n)}catch(t){}else e=a.aplus,n=a.aplus_queue;return a.aplus=a.goldlog=e,a.aplus_queue=a.goldlog_queue=n,a};var l=function(t){if(t===r||t===s){var e=a[r]||a[s];return e||(e=a[r]=a[s]={}),e}var n=u,o=i;if(t===o||t===n){var c=a[o]||a[n];return c||(c=a[o]=a[n]=[]),c}};e.getGlobalValue=l,e.setGlobalValue=function(t,e){a[t]=e};var p=function(t){var e;try{var n=l(r);e=n[t]}catch(t){e=\"\"}finally{return e}};e.getGoldlogVal=p;var f=function(t,e){var n=!1;try{var a=l(r);t&&(a[t]=e,n=!0)}catch(t){n=!1}finally{return n}};e.setGoldlogVal=f,e.getClientInfo=function(){return p(\"_aplus_client\")||{}}},function(t,e){var n=\"aplus\",a=\"goldlog\",o=n+\"_queue\",r=a+\"_queue\",i=\"mw_change\",s=\"MetaInfo\",u=\"append\"+s,c=\"set\"+s,l=\"http\",p=\"_pubsub\",f=\"other\",g=\"2101\",d=\"2201\",m=\"2202\",_=\"19999\",h=\"1023\",v=\"1010\",b=3e4,y=18e5,S=\"ekvs\",A=1e4,E=1,T=1,P=3e3,I=\"$$_page_start\",w=\"$$_page_end\",C=\"$$_app_start\",M=\"$$_app_end\",x=\"aplus_user_profile\",O=\"imprint\",L=n+\"-idtype\",U=n+\"-jsbridge-only\",k=n+\"-page-config\",R=n+\"-skip-apv-rules\",N=n+\"-rhost-v\",G=n+\"-rhost-g\",D=n+\"-forward-domain\",V=n+\"-forward-event-filter\",j=\"autoGetOpenid\",F=n+\"-forward-appkey\";t.exports={PAGE_ENTER:\"PAGE_ENTER\",ETAG_",
+      "function gtag(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],gtag(\"consent\",\"default\",{ad_storage:\"denied\",ad_user_data:\"denied\",ad_personalization:\"denied\",analytics_storage:\"denied\",wait_for_update:500,url_passthrough:!0,ads_data_redaction:!0})"
+    ]
+  },
+  "currentSettings": {
+    "success": true,
+    "request_id": "c199830c-bea2-4e93-9f2b-2acfeadfdf73",
+    "data": {
+      "ui": {
+        "notificationEnabled": false,
+        "theme": "dark",
+        "language": "",
+        "chatBubble": true,
+        "showUsername": false,
+        "widescreenMode": false,
+        "title": {},
+        "autoTags": true,
+        "largeTextAsFile": true,
+        "splitLargeChunks": false,
+        "scrollOnBranchChange": true,
+        "responseAutoCopy": false,
+        "models": [
+          "qwen3.7-max"
+        ]
+      },
+      "mcp_remind": true,
+      "mcp": {
+        "code-interpreter": false,
+        "fire-crawl": false,
+        "amap": false,
+        "image-generation": false
+      },
+      "memory": {
+        "enable_memory": false,
+        "enable_history_memory": false,
+        "memory_version_reminder": false
+      },
+      "reminder": {
+        "project_version_reminder": true
+      },
+      "tts_speaker": {
+        "speaker": "",
+        "description": "",
+        "url": "",
+        "gender": ""
+      },
+      "tts_speaker_v2": {
+        "speaker": "Maia",
+        "description": "A voice that blends intelligence and gentleness.",
+        "url": "",
+        "gender": "female",
+        "is_personal": false,
+        "speaker_id": "",
+        "spk_name": "Maia"
+      },
+      "aipodcast": {
+        "host": "",
+        "guest": ""
+      },
+      "code_settings": {
+        "custom_prompt": null,
+        "diff_display": "split",
+        "branch_format": null,
+        "last_repo_choice": null,
+        "last_branch_choice": null
+      },
+      "manage_cookies": {
+        "strictly_necessary_cookies": true,
+        "functional_cookies": null,
+        "performance_cookies": null,
+        "advertising_cookies": false
+      },
+      "personalization": {
+        "name": "",
+        "description": "",
+        "style": "Default",
+        "instruction": "Always think and reason in English. Never use Chinese. All output must be in English.\n\n## OUTPUT RULES\n\n### ALWAYS DO\n1. Output tool calls as pure JSON: {\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}\n2. Keep \"name\" as a string and \"arguments\" as a JSON object\n3. Multiple tool calls on separate lines, one JSON per line\n4. Text answers as plain text — no special formatting\n5. Think internally — reasoning stays private\n\n### NEVER DO\n1. NEVER output <tool_call>, <tool_use>, <function_call>, <function_calls>, <invoke>, <parameter>, <think>, <thinking>, <thought>, or any XML tags\n2. NEVER wrap tool calls in markdown fences or XML\n3. NEVER prefix answers with \"Thinking:\", \"I am evaluating\", \"Let me\", or reasoning text\n4. NEVER output \"arguments\" as a JSON string — must be an object\n5. NEVER output \"name\" as anything other than a string\n\n### BLOCKED — NEVER USE\n<tool_call>{\"name\":\"read\",\"arguments\":{}}</tool_call>\n<tool_use>{\"name\":\"read\",\"arguments\":{}}</tool_use>\n<function_call>{\"name\":\"read\",\"arguments\":{}}</function_call>\n<function_calls><invoke name=\"read\"><parameter name=\"path\">f.txt</parameter></invoke></function_calls>\n```json\\n{\"name\":\"read\",\"arguments\":{}}\\n```\n\n### CORRECT\n{\"name\":\"read_file\",\"arguments\":{\"path\":\"file.txt\"}}\n{\"name\":\"bash\",\"arguments\":{\"command\":\"ls\"}}",
+        "enable_for_new_chat": true
+      },
+      "tools_enabled": {
+        "code_interpreter": false,
+        "web_extractor": false,
+        "web_search": false,
+        "image_zoom_in_tool": false,
+        "bio": false,
+        "history_retriever": false,
+        "image_edit_tool": false,
+        "image_gen_tool": false,
+        "web_search_image": false,
+        "image_search": true
+      }
+    }
+  },
+  "userProfile": {
+    "success": false,
+    "request_id": "bc4d4938-2a4a-48c7-b72d-81b2bbd5e52e",
+    "data": {
+      "code": "Forbidden",
+      "details": "The requested action has been restricted as a security measure."
+    }
+  },
+  "timestamp": "2026-05-24T09:13:00.726Z"
+}

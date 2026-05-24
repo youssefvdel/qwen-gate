@@ -41,6 +41,13 @@ export interface LogEntry {
   };
   // Errors
   errors: string[];
+  networkTiming?: {
+    ttfb: number | null;           // ms
+    totalDuration: number | null;  // ms
+    chunksReceived: number;
+    chunksPerSecond: number | null;
+    debugEntryId: string;          // link to full network debug entry
+  };
 }
 
 const MAX_ENTRIES = 100;
@@ -116,6 +123,12 @@ class LogStore {
 
   getAll(): LogEntry[] {
     return this.entries;
+  }
+
+  setNetworkTiming(id: string, timing: LogEntry['networkTiming']): void {
+    this.updateEntry(id, entry => {
+      entry.networkTiming = timing;
+    });
   }
 
   // SSE listener management

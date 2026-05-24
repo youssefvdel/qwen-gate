@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { getBasicHeaders } from './playwright.ts';
 import { pickAccount } from './auth.ts';
+import { createNetworkEntry, recordResponse, completeEntry, errorEntry } from './networkDebug.ts';
 
 interface PoolEntry {
   chatId: string;
@@ -77,10 +78,20 @@ export class SessionPool {
       console.log(`[SessionPool] DELETE_SESSION=false, keeping ${chatId.substring(0, 8)}...`);
       return;
     }
+
+    const { cookie, userAgent } = cachedHeaders || await getBasicHeaders(accountEmail);
+    const requestId = uuidv4();
+    const debugEntry = createNetworkEntry({
+      url: `https://chat.qwen.ai/api/v2/chats/${chatId}`,
+      method: 'DELETE',
+      headers: { cookie, 'user-agent': userAgent, 'x-request-id': requestId },
+      category: 'session-delete',
+      accountEmail: accountEmail,
+    });
+
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
-      const { cookie, userAgent } = cachedHeaders || await getBasicHeaders(accountEmail);
       const response = await fetch(`https://chat.qwen.ai/api/v2/chats/${chatId}`, {
         method: 'DELETE',
         signal: controller.signal,
@@ -90,18 +101,24 @@ export class SessionPool {
           'cookie': cookie,
           'referer': 'https://chat.qwen.ai/',
           'user-agent': userAgent,
-          'x-request-id': uuidv4(),
+          'x-request-id': requestId,
           'source': 'web',
         },
       });
       clearTimeout(timeout);
+      recordResponse(debugEntry.id, response);
       if (response.ok) {
+        completeEntry(debugEntry.id);
         console.log(`[SessionPool] Deleted session ${chatId.substring(0, 8)}...`);
+      } else {
+        errorEntry(debugEntry.id, `Delete returned ${response.status}`);
       }
     } catch (err: any) {
       if (err.name === 'AbortError') {
+        errorEntry(debugEntry.id, 'Delete request aborted (timeout)');
         console.warn(`[SessionPool] Delete timeout for ${chatId.substring(0, 8)}...`);
       } else {
+        errorEntry(debugEntry.id, err.message);
         console.warn(`[SessionPool] Delete failed for ${chatId.substring(0, 8)}...: ${err.message}`);
       }
     }
@@ -118,26 +135,47 @@ export class SessionPool {
 
   private async createSession(email?: string): Promise<string> {
     const { cookie, userAgent } = await getBasicHeaders(email);
-    const response = await fetch('https://chat.qwen.ai/api/v2/chats/new', {
+    const requestId = uuidv4();
+    const debugEntry = createNetworkEntry({
+      url: 'https://chat.qwen.ai/api/v2/chats/new',
       method: 'POST',
-      headers: {
-        'accept': 'application/json, text/plain, */*',
-        'content-type': 'application/json',
-        'cookie': cookie,
-        'referer': 'https://chat.qwen.ai/',
-        'user-agent': userAgent,
-        'x-request-id': uuidv4(),
-        'source': 'web',
-      },
-      body: JSON.stringify({}),
+      headers: { cookie, 'user-agent': userAgent, 'x-request-id': requestId, source: 'web' },
+      body: {},
+      category: 'session-create',
+      accountEmail: email,
     });
+
+    let response: Response;
+    try {
+      response = await fetch('https://chat.qwen.ai/api/v2/chats/new', {
+        method: 'POST',
+        headers: {
+          'accept': 'application/json, text/plain, */*',
+          'content-type': 'application/json',
+          'cookie': cookie,
+          'referer': 'https://chat.qwen.ai/',
+          'user-agent': userAgent,
+          'x-request-id': requestId,
+          'source': 'web',
+        },
+        body: JSON.stringify({}),
+      });
+      recordResponse(debugEntry.id, response);
+    } catch (err) {
+      errorEntry(debugEntry.id, err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+
     if (!response.ok) {
+      errorEntry(debugEntry.id, `Chats/new returned ${response.status}`);
       throw new Error(`Chats/new returned ${response.status}`);
     }
     const json = await response.json();
     if (!json.data?.id) {
+      errorEntry(debugEntry.id, `Chats/new returned no id`);
       throw new Error(`Chats/new returned no id: ${JSON.stringify(json).substring(0, 100)}`);
     }
+    completeEntry(debugEntry.id);
     return json.data.id;
   }
 }

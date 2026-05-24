@@ -576,6 +576,7 @@ export async function chatCompletions(c: Context) {
 
     return honoStream(c, async (streamWriter: any) => {
       let heartbeatInterval: any;
+      let totalChunks = 0;
       try {
       // Send heartbeat to prevent Cloudflare 524 timeout
       await streamWriter.write(': heartbeat\n\n');
@@ -641,7 +642,17 @@ export async function chatCompletions(c: Context) {
       while (true) {
         if (streamDone) break;
         if (c.req.raw?.signal?.aborted) { reader.cancel(); break; }
-        const { done, value } = await reader.read();
+
+        let done: boolean;
+        let value: Uint8Array | undefined;
+        try {
+          const readResult = await reader.read();
+          done = readResult.done;
+          value = readResult.value;
+        } catch (readErr: any) {
+          throw readErr;
+        }
+
         if (done) {
           upstreamDoneAt = Date.now();
           console.log(`[Chat][timing] upstream reader done=true. lastChunk=${lastChunkAt ? ((upstreamDoneAt - lastChunkAt) + 'ms after last chunk') : 'never got chunk'}. totalChunks=${totalChunks}`);
@@ -670,6 +681,19 @@ export async function chatCompletions(c: Context) {
 
           try {
             const chunk = JSON.parse(dataStr);
+
+            if (chunk.choices?.[0]?.delta?.status === 'finished') {
+              const deltaPhase = chunk.choices[0].delta.phase;
+              // 'thinking_summary' finished just means thinking is done — content (answer) comes next.
+              if (deltaPhase === 'thinking_summary') {
+                console.log(`[Chat][timing] Qwen thinking_summary phase finished, waiting for answer...`);
+              } else {
+                streamDone = true;
+                qwenDoneSignalAt = Date.now();
+                console.log(`[Chat][timing] Qwen sent status=finished (phase=${deltaPhase || 'none'}). lastChunk=${(qwenDoneSignalAt - lastChunkAt)}ms ago. streamAge=${(qwenDoneSignalAt - firstChunkAt)}ms`);
+                break;
+              }
+            }
 
             if (chunk['response.created'] && chunk['response.created'].response_id) {
               if (!targetResponseId) {

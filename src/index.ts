@@ -11,6 +11,7 @@ import { networkInterfaces } from 'os';
 import { logStore } from './services/logStore.ts';
 import { logHtml } from './routes/logPage.ts';
 import { stream as honoStream } from 'hono/streaming';
+import { debugNetworkApp } from './routes/debugNetwork.ts';
 
 dotenv.config();
 
@@ -98,6 +99,8 @@ app.get('/log/stream', (c) => {
     }
   );
 });
+
+app.route('/debug/network', debugNetworkApp);
 
 // OpenAI compatible routes
 app.post('/v1/chat/completions', chatCompletions);
