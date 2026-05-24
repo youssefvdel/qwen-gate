@@ -16,3 +16,6 @@ qwen_profile/
 TODO.md
 /graphify-out
 .vault
+.opencode
+logs/
+output-problems/

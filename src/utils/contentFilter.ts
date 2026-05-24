@@ -137,10 +137,153 @@ export function filterContent(raw: string): FilterResult {
   text = cleanParagraphs.join('\n\n');
   text = text.replace(/\n{3,}/g, '\n\n');
 
+  // ── Pass 3: Strip any remaining tool call JSON and Tool Response echoes ──
+  text = stripToolCallArtifacts(text);
+
   return {
     cleanText: text,
     thinking: capturedThinking.filter(t => t.length > 0).join('\n'),
   };
+}
+
+/**
+ * Strips raw JSON tool call artifacts from text — catches any tool call JSON that
+ * the StreamingToolParser missed or that leaked through in the non-streaming path.
+ * Also removes "Tool Response (name): ..." echoes that the model may reproduce
+ * from the message history, preventing context window bloat on the client side.
+ */
+export function stripToolCallArtifacts(text: string): string {
+  if (!text) return '';
+
+  // ── Pass 1: Strip raw JSON tool calls: {"name":"...","arguments":{...}} ─
+  let result = '';
+  let remaining = text;
+
+  while (remaining.length > 0) {
+    // Find potential tool call start: {"name" or {"function"
+    const toolCallStart = remaining.search(/\{\s*"(?:name|function)"\s*:/);
+    if (toolCallStart === -1) {
+      result += remaining;
+      break;
+    }
+
+    // Emit text before the potential tool call
+    result += remaining.substring(0, toolCallStart);
+
+    // Find the opening brace for scanning
+    const braceIdx = remaining.indexOf('{', toolCallStart);
+    if (braceIdx === -1) {
+      result += remaining.substring(toolCallStart);
+      break;
+    }
+
+    // Scan for balanced closing brace
+    let depth = 0;
+    let inStr = false;
+    let escaped = false;
+    let endIdx = braceIdx;
+
+    for (; endIdx < remaining.length; endIdx++) {
+      const c = remaining[endIdx];
+      if (escaped) { escaped = false; continue; }
+      if (c === '\\') { escaped = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === '{') depth++;
+      else if (c === '}') {
+        depth--;
+        if (depth === 0) {
+          endIdx++; // include the closing brace
+          break;
+        }
+      }
+    }
+
+    if (depth !== 0) {
+      // Unbalanced — emit everything and stop
+      result += remaining.substring(braceIdx);
+      break;
+    }
+
+    const jsonStr = remaining.substring(braceIdx, endIdx);
+
+    // Quick check: does it look like a tool call?
+    // Strip any JSON with a "name" field — even partial/malformed ones without "arguments".
+    // This prevents tool-call JSON fragments from echoing back into the context window.
+    const hasNameField = /"name"\s*:\s*"[^"]*"/.test(jsonStr);
+    const hasArgsField = /\barguments\s*:/.test(jsonStr);
+    if (hasNameField) {
+      try {
+        const parsed = JSON.parse(jsonStr);
+        const name = parsed.name || parsed.function?.name;
+        if (name && typeof name === 'string') {
+          // Skip tool call + trailing whitespace/newline
+          const after = remaining.substring(endIdx);
+          const trailing = after.match(/^[\s\n]*/);
+          const skipLen = trailing ? trailing[0].length : 0;
+          remaining = after.substring(skipLen);
+          continue;
+        }
+      } catch {
+        // Malformed JSON but it LOOKS like a tool call (has "name":"...")
+        // Strip it anyway to prevent context bloat from garbled tool call output.
+        const after = remaining.substring(endIdx);
+        const trailing = after.match(/^[\s\n]*/);
+        const skipLen = trailing ? trailing[0].length : 0;
+        remaining = after.substring(skipLen);
+        continue;
+      }
+    }
+    // Also strip JSON with arguments field even without name (incomplete tool calls)
+    if (hasArgsField && jsonStr.includes('"function"')) {
+      const after = remaining.substring(endIdx);
+      const trailing = after.match(/^[\s\n]*/);
+      const skipLen = trailing ? trailing[0].length : 0;
+      remaining = after.substring(skipLen);
+      continue;
+    }
+
+    // Not a tool call after all — emit the opening brace and continue
+    result += '{';
+    remaining = remaining.substring(braceIdx + 1);
+  }
+
+  text = result;
+
+  // ── Pass 2: Strip "Tool Response (name): ..." echoes ────────────────
+  // Model may echo back the tool result that was in the prompt.
+  // These lines start with "Tool Response (toolName):" and contain the
+  // tool result from the message history, which the client already has.
+  // The continuation captures multi-line content until:
+  // - a blank line (paragraph break)
+  // - another "Tool Response" starting
+  // - a tool call JSON `{"name...` starting
+  // - end of text
+  text = text.replace(/Tool Response \([^)]+\):[^\n]*(?:\n(?!\s*(?:\n|$)|Tool Response\s*\(|{"name)[^\n]*)*/g, '');
+
+  // ── Pass 3: Strip trailing dangling tool call tails like `}]}}}` ──
+  // These can appear when a tool call array gets partially rendered.
+  text = text.replace(/^[\s]*[\]\}]+[\}\]\}]*\s*$/gm, '');
+
+  // ── Pass 4: Strip any remaining XML-like tool wrapper tags ─────────
+  // Safety net: if the model ever outputs ,>,
+  // <tool_call>, or similar XML wrappers despite instructions, strip them
+  // completely (including content between matching tags).
+  const XML_TOOL_PATTERNS = [
+    /<function_calls>[\s\S]*?<\/function_calls>/gi,
+    /<tool_call>[\s\S]*?<\/tool_call>/gi,
+    /<tool_use>[\s\S]*?<\/tool_use>/gi,
+    /<tools?>[\s\S]*?<\/tools?>/gi,
+    /<\/?(?:function_calls?|tool_call|tool_use|tools?)\s*>/gi,
+  ];
+  for (const pattern of XML_TOOL_PATTERNS) {
+    text = text.replace(pattern, '');
+  }
+
+  // Clean up excess blank lines left by removals
+  text = text.replace(/\n{3,}/g, '\n\n').trim();
+
+  return text;
 }
 
 /**

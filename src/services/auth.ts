@@ -1,4 +1,55 @@
 import crypto from 'crypto';
+import path from 'path';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs';
+import { activePage } from './playwright.ts';
+
+// ─── Login Mutex ────────────────────────────────────────────────────────────────
+// Serialize browser-context logins: only one activePage, cookie clearing is global.
+// Local implementation to avoid circular dependency with playwright.ts.
+class LoginMutex {
+  private queue: (() => void)[] = [];
+  private locked = false;
+
+  async acquire(): Promise<() => void> {
+    if (!this.locked) {
+      this.locked = true;
+      return () => this.release();
+    }
+    return new Promise<() => void>(resolve => {
+      this.queue.push(() => {
+        resolve(() => this.release());
+      });
+    });
+  }
+
+  private release(): void {
+    const next = this.queue.shift();
+    if (next) {
+      next();
+    } else {
+      this.locked = false;
+    }
+  }
+}
+
+// ─── Playwright Session Check ───────────────────────────────────────────────────
+
+/**
+ * Check if Playwright has an active browser session with auth cookies.
+ * Used as fallback when Qwen's REST signin API returns 200 but no token.
+ */
+async function checkPlaywrightSession(): Promise<boolean> {
+  try {
+    if (!activePage) return false;
+    const cookies = await activePage.context().cookies();
+    return cookies.some(c =>
+      c.name.toLowerCase().includes('token') ||
+      c.name.toLowerCase().includes('session')
+    );
+  } catch {
+    return false;
+  }
+}
 
 export interface AuthState {
   token: string;
@@ -24,31 +75,23 @@ let accounts: AccountEntry[] = [];
 let roundRobinIndex = 0;
 let initDone = false;
 
-// ─── Account Parsing ────────────────────────────────────────────────────────────
-
-function parseAccounts(): Array<{ email: string; password: string }> {
-  const accountsEnv = process.env.QWEN_ACCOUNTS;
-  if (accountsEnv && accountsEnv.trim()) {
-    const parsed = accountsEnv
-      .split(',')
-      .map(s => s.trim())
-      .filter(s => s.includes(':'))
-      .map(s => {
-        const colonIdx = s.indexOf(':');
-        return {
-          email: s.substring(0, colonIdx).trim(),
-          password: s.substring(colonIdx + 1).trim(),
-        };
-      })
-      .filter(a => a.email && a.password);
-    if (parsed.length > 0) return parsed;
+function discoverSavedAccounts(): Array<{ email: string; password: string }> {
+  try {
+    if (!existsSync(COOKIE_DIR)) return [];
+    const files = readdirSync(COOKIE_DIR).filter((f: string) => f.endsWith('.json'));
+    const accounts: Array<{ email: string; password: string }> = [];
+    for (const file of files) {
+      try {
+        const data: SavedAccountData = JSON.parse(readFileSync(path.join(COOKIE_DIR, file), 'utf-8'));
+        if (data.email && data.token) {
+          accounts.push({ email: data.email, password: '' });
+        }
+      } catch {}
+    }
+    return accounts;
+  } catch {
+    return [];
   }
-
-  // Fallback to single account
-  const email = process.env.QWEN_EMAIL;
-  const password = process.env.QWEN_PASSWORD;
-  if (email && password) return [{ email, password }];
-  return [];
 }
 
 // ─── Account Selection ──────────────────────────────────────────────────────────
@@ -218,10 +261,136 @@ async function ensureAccountFresh(acct: AccountEntry): Promise<boolean> {
 
 // ─── Login ──────────────────────────────────────────────────────────────────────
 
-async function loginFresh(email: string, password: string): Promise<AuthState | null> {
-  const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
-  console.log(`[Auth] Logging in as ${email}...`);
+// Lock to serialize browser-context logins (only one activePage, cookie clearing is global)
+const loginMutex = new LoginMutex();
 
+/**
+ * Login via browser context — executes signin API inside the browser via evaluate().
+ * This gives proper anti-bot/WAF headers and lets the browser capture Set-Cookie automatically.
+ * After the call, we extract the token from both the response data and browser cookies.
+ */
+async function loginFreshViaBrowser(email: string, hashedPassword: string): Promise<AuthState | null> {
+  const release = await loginMutex.acquire();
+  try {
+    if (!activePage) return null;
+
+    // Ensure page is on the right origin for proper CORS/cookie handling
+    try {
+      const currentUrl = activePage.url();
+      if (!currentUrl.startsWith('https://chat.qwen.ai')) {
+        await activePage.goto('https://chat.qwen.ai', { waitUntil: 'domcontentloaded' });
+      }
+    } catch (err: any) {
+      console.warn(`[Auth] Navigation check failed for ${email}: ${err.message}`);
+    }
+
+    // Clear existing auth cookies for a clean slate (this is global to the browser context)
+    try {
+      const context = activePage.context();
+      const existingCookies = await context.cookies();
+      const authCookies = existingCookies.filter(c =>
+        c.name === 'token' ||
+        c.name === 'refresh_token' ||
+        c.name.toLowerCase().includes('session') ||
+        c.name.toLowerCase().includes('token')
+      );
+      if (authCookies.length > 0) {
+        // clearCookies with specific domains — Playwright API: clearCookies(urls?)
+        await context.clearCookies();
+      }
+    } catch (err: any) {
+      console.warn(`[Auth] Cookie clearing failed for ${email}: ${err.message}`);
+    }
+
+    // Execute signin API call inside the browser context
+    let evalResult: { ok: boolean; status: number; token: string | null; refreshToken: string | null; dataKeys: string[] };
+    try {
+      evalResult = await activePage.evaluate(async ({ email, hashedPassword }: { email: string; hashedPassword: string }) => {
+        const response = await fetch('https://chat.qwen.ai/api/v2/auths/signin', {
+          method: 'POST',
+          headers: {
+            'accept': 'application/json, text/plain, */*',
+            'content-type': 'application/json',
+            'source': 'web',
+            'timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+            'x-request-id': crypto.randomUUID(),
+          },
+          credentials: 'include',
+          body: JSON.stringify({ email, password: hashedPassword, login_type: 'email' }),
+        });
+
+        let data: any = {};
+        try { data = await response.json(); } catch {}
+
+        const token = data?.data?.token || data?.token || data?.data?.session_token || null;
+        const refreshToken = data?.data?.refresh_token || data?.refresh_token || null;
+
+        return {
+          ok: response.ok,
+          status: response.status,
+          token: token as string | null,
+          refreshToken: refreshToken as string | null,
+          dataKeys: Object.keys(data),
+        };
+      }, { email, hashedPassword });
+    } catch (err: any) {
+      console.error(`[Auth] Browser evaluate failed for ${email}: ${err.message}`);
+      return null;
+    }
+
+    if (!evalResult.ok) {
+      console.error(`[Auth] Login failed for ${email} (${evalResult.status})`);
+      return null;
+    }
+
+    // Extract token from browser cookies (the browser auto-captured Set-Cookie headers)
+    let cookieToken: string | null = null;
+    let cookieRefresh: string | null = null;
+    try {
+      const cookies = await activePage.context().cookies();
+      const tokenCookie = cookies.find(c =>
+        c.name === 'token' ||
+        (c.name.toLowerCase().includes('token') && c.domain.includes('qwen') && !c.name.toLowerCase().includes('refresh'))
+      );
+      const refreshCookie = cookies.find(c =>
+        c.name === 'refresh_token' ||
+        (c.name.toLowerCase().includes('refresh') && c.domain.includes('qwen'))
+      );
+      cookieToken = tokenCookie?.value || null;
+      cookieRefresh = refreshCookie?.value || null;
+    } catch (err: any) {
+      console.warn(`[Auth] Cookie read failed for ${email}: ${err.message}`);
+    }
+
+    // Prefer token from response body, fallback to cookie
+    const finalToken = evalResult.token || cookieToken;
+    const finalRefresh = evalResult.refreshToken || cookieRefresh;
+
+    if (finalToken) {
+      const state: AuthState = {
+        token: finalToken,
+        expiresAt: Date.now() + AUTH_TOKEN_MAX_AGE_MS,
+        refreshToken: finalRefresh,
+      };
+      console.log(`[Auth] Login successful for ${email} (token from ${evalResult.token ? 'response' : 'cookie'})`);
+      return state;
+    }
+
+    console.warn(
+      `[Auth] Login returned 200 for ${email} but no token found. ` +
+      `Response keys: [${evalResult.dataKeys.join(', ')}]. ` +
+      `No auth cookies captured.`
+    );
+    return null;
+  } finally {
+    release();
+  }
+}
+
+/**
+ * Login via plain fetch — fallback for when Playwright is not available (test mode).
+ */
+async function loginFreshViaFetch(email: string, hashedPassword: string): Promise<AuthState | null> {
   try {
     const response = await fetch('https://chat.qwen.ai/api/v2/auths/signin', {
       method: 'POST',
@@ -258,6 +427,17 @@ async function loginFresh(email: string, password: string): Promise<AuthState | 
         return state;
       }
 
+      // In fetch fallback mode, check Playwright session as last resort
+      const hasPlaywrightSession = await checkPlaywrightSession();
+      if (hasPlaywrightSession) {
+        console.log(`[Auth] ${email}: API returned no token but Playwright session is valid (cookie-based auth)`);
+        return {
+          token: '',
+          expiresAt: Date.now() + AUTH_TOKEN_MAX_AGE_MS,
+          refreshToken: null,
+        };
+      }
+
       console.warn(`[Auth] API login returned 200 but no token for ${email}:`, JSON.stringify(data).substring(0, 200));
     } else {
       const errText = await response.text();
@@ -270,22 +450,41 @@ async function loginFresh(email: string, password: string): Promise<AuthState | 
   return null;
 }
 
+/**
+ * Login an account — uses browser-context API calls when Playwright is active,
+ * falls back to plain fetch for test/no-browser mode.
+ */
+async function loginFresh(email: string, password: string): Promise<AuthState | null> {
+  const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
+  console.log(`[Auth] Logging in as ${email}...`);
+
+  // Browser path: use activePage.evaluate() for proper WAF headers + cookie capture
+  if (activePage && !process.env.TEST_MOCK_PLAYWRIGHT) {
+    const browserResult = await loginFreshViaBrowser(email, hashedPassword);
+    if (browserResult) return browserResult;
+    // If browser login failed (e.g., page crashed), fall through to fetch
+    console.warn(`[Auth] Browser login failed for ${email}, trying fetch fallback...`);
+  }
+
+  // Fetch fallback: for test mode or when browser path fails
+  return loginFreshViaFetch(email, hashedPassword);
+}
+
 // ─── Initialization ─────────────────────────────────────────────────────────────
 
 export async function initAuth(): Promise<void> {
   if (initDone) return;
   initDone = true;
 
-  const parsed = parseAccounts();
-  if (parsed.length === 0) {
-    console.warn('[Auth] No accounts configured. Set QWEN_ACCOUNTS=email:pass,... or QWEN_EMAIL/QWEN_PASSWORD in .env');
+  const saved = discoverSavedAccounts();
+  if (saved.length === 0) {
+    console.warn('[Auth] No saved accounts found. Run: npm run login user@example.com');
     return;
   }
 
-  console.log(`[Auth] Initializing ${parsed.length} account(s)...`);
+  console.log(`[Auth] Initializing ${saved.length} account(s)...`);
 
-  // Initialize account entries
-  accounts = parsed.map(a => ({
+  accounts = saved.map((a: { email: string; password: string }) => ({
     email: a.email,
     password: a.password,
     state: null,
@@ -295,22 +494,32 @@ export async function initAuth(): Promise<void> {
     loginAttempt: 0,
   }));
 
-  // Login all accounts in parallel
-  const results = await Promise.allSettled(
-    accounts.map(async (acct) => {
-      const state = await loginFresh(acct.email, acct.password);
-      if (state) {
-        acct.state = state;
-      }
-    })
-  );
+  // Login all accounts sequentially with delays between them.
+  // Sequential is required because:
+  // 1. Browser-context login uses shared activePage + global cookie jar
+  // 2. Parallel requests trigger Qwen's WAF/anti-bot protection
+  for (let i = 0; i < accounts.length; i++) {
+    const acct = accounts[i];
+
+    // First try: load saved token from manual npm run login
+    const savedState = await loadSavedCookies(acct.email);
+    if (savedState) {
+      acct.state = savedState;
+      console.log(`[Auth] ✓ ${acct.email}`);
+    }
+
+    // Delay between accounts to avoid rate limiting (skip after last)
+    if (i < accounts.length - 1) {
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
 
   // Report results
-  const successCount = accounts.filter(a => a.state !== null).length;
+  const successCount = accounts.filter(a => a.state !== null && a.state.token).length;
   console.log(`[Auth] ${successCount}/${accounts.length} account(s) authenticated successfully.`);
   
   for (const acct of accounts) {
-    const status = acct.state ? '✓' : '✗';
+    const status = acct.state?.token ? '✓' : '✗';
     console.log(`[Auth]   ${status} ${acct.email}`);
   }
 }
@@ -351,6 +560,80 @@ export function getAccountCount(): number {
 
 export function getAvailableCount(): number {
   return accounts.filter(isAvailable).length;
+}
+
+export function getAllAccountEmails(): string[] {
+  return accounts.map(a => a.email);
+}
+
+// ─── Per-Account Cookie Store ───────────────────────────────────────────
+
+const COOKIE_DIR = 'qwen_profile/cookies';
+
+function getCookieFilePath(email: string): string {
+  const hash = crypto.createHash('md5').update(email.toLowerCase().trim()).digest('hex');
+  return path.join(COOKIE_DIR, `${hash}.json`);
+}
+
+interface SavedAccountData {
+  email: string;
+  token: string;
+  refreshToken: string | null;
+  savedAt: number;
+  expiresAt: number;
+}
+
+/**
+ * Load saved token for an account from disk. Called by initAuth.
+ * Returns AuthState if a valid, non-expired token was found, null otherwise.
+ */
+export async function loadSavedCookies(email: string): Promise<AuthState | null> {
+  try {
+    const filePath = getCookieFilePath(email);
+    if (!existsSync(filePath)) return null;
+
+    const raw = readFileSync(filePath, 'utf-8');
+    const data: SavedAccountData = JSON.parse(raw);
+
+    if (!data.token || data.email.toLowerCase() !== email.toLowerCase()) return null;
+
+    if (data.expiresAt < Date.now()) {
+      console.log(`[Auth] Saved token for ${email} expired, will try refresh/login`);
+      return null;
+    }
+
+    console.log(`[Auth] Loaded saved token for ${email} (expires in ${Math.round((data.expiresAt - Date.now()) / 60000)}min)`);
+    return {
+      token: data.token,
+      expiresAt: data.expiresAt,
+      refreshToken: data.refreshToken,
+    };
+  } catch (err: any) {
+    console.warn(`[Auth] Failed to load saved cookies for ${email}: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Save token for an account to disk. Called by login.ts after manual login.
+ */
+export async function saveCookies(email: string, token: string, refreshToken?: string | null, expiresAt?: number): Promise<void> {
+  try {
+    if (!existsSync(COOKIE_DIR)) mkdirSync(COOKIE_DIR, { recursive: true });
+
+    const data: SavedAccountData = {
+      email: email.toLowerCase().trim(),
+      token,
+      refreshToken: refreshToken || null,
+      savedAt: Date.now(),
+      expiresAt: expiresAt || (Date.now() + AUTH_TOKEN_MAX_AGE_MS),
+    };
+
+    writeFileSync(getCookieFilePath(email), JSON.stringify(data, null, 2), 'utf-8');
+    console.log(`[Auth] Saved token for ${email}`);
+  } catch (err: any) {
+    console.error(`[Auth] Failed to save cookies for ${email}: ${err.message}`);
+  }
 }
 
 // ─── Backward Compatibility ─────────────────────────────────────────────────────

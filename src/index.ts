@@ -3,11 +3,12 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { bearerAuth } from 'hono/bearer-auth';
 import { chatCompletions } from './routes/chat.ts';
-import { fetchQwenModels } from './services/qwen.ts';
+import { fetchQwenModels, disableNativeTools, disablePersonalization } from './services/qwen.ts';
 import * as dotenv from 'dotenv';
 import { initPlaywright, activePage, BrowserType, getQwenHeaders } from './services/playwright.ts';
 import { initAuth, getAccountStats, getAccountCount, getAvailableCount } from './services/auth.ts';
 import { networkInterfaces } from 'os';
+import { resolve } from 'path';
 import { logStore } from './services/logStore.ts';
 import { logHtml } from './routes/logPage.ts';
 import { stream as honoStream } from 'hono/streaming';
@@ -130,6 +131,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     browserType = process.env.BROWSER as BrowserType;
   }
 
+  // Enable log persistence — writes system logs and request-level raw/processed logs to disk
+  logStore.enablePersistence(resolve(process.cwd(), 'logs'));
+
   initPlaywright(true, browserType).then(async () => {
     console.log(`Playwright initialized (${browserType}).`);
 
@@ -145,6 +149,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     } catch (err: any) {
       console.warn('[Startup] Header pre-warm failed:', err.message);
     }
+
+    await Promise.allSettled([
+      disableNativeTools().catch(err => console.warn('[Startup] disableNativeTools failed:', err.message)),
+      disablePersonalization().catch(err => console.warn('[Startup] disablePersonalization failed:', err.message)),
+    ]);
 
     const port = parseInt(process.env.PORT || '26405', 10) || 26405;
     

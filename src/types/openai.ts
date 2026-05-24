@@ -8,9 +8,9 @@
 // ─── JSON Schema ───────────────────────────────────────────────────────────────
 
 export interface JsonSchema {
-  type: string;
+  type?: string | string[];
   properties?: Record<string, JsonSchema>;
-  items?: JsonSchema;
+  items?: JsonSchema | JsonSchema[];
   required?: string[];
   enum?: unknown[];
   const?: unknown;
@@ -21,11 +21,17 @@ export interface JsonSchema {
   oneOf?: JsonSchema[];
   allOf?: JsonSchema[];
   not?: JsonSchema;
+  $ref?: string;
+  $defs?: Record<string, JsonSchema>;
+  definitions?: Record<string, JsonSchema>;
   if?: JsonSchema;
   then?: JsonSchema;
   else?: JsonSchema;
   minimum?: number;
   maximum?: number;
+  exclusiveMinimum?: number;
+  exclusiveMaximum?: number;
+  multipleOf?: number;
   minLength?: number;
   maxLength?: number;
   pattern?: string;
@@ -33,7 +39,12 @@ export interface JsonSchema {
   minItems?: number;
   maxItems?: number;
   uniqueItems?: boolean;
+  minProperties?: number;
+  maxProperties?: number;
+  patternProperties?: Record<string, JsonSchema>;
   nullable?: boolean;
+  title?: string;
+  examples?: unknown[];
 }
 
 // ─── Function Tool Definitions ─────────────────────────────────────────────────
@@ -86,6 +97,9 @@ export interface OpenAIRequest {
   stream?: boolean;
   tools?: FunctionToolDefinition[];
   tool_choice?: ToolChoice;
+  stream_options?: {
+    include_usage?: boolean;
+  };
 }
 
 // ─── Streaming Response ────────────────────────────────────────────────────────
@@ -151,16 +165,22 @@ export interface ToolCallResult {
 
 // ─── Tool Handler ──────────────────────────────────────────────────────────────
 
-export type ToolHandler = (
-  args: Record<string, unknown>,
-  context: ToolExecutionContext
-) => Promise<unknown>;
+export type ToolHandler<TArgs = any, TResult = any> = (
+  args: TArgs,
+  context: ToolContext
+) => Promise<TResult>;
 
-export interface ToolExecutionContext {
-  messages: Message[];
+// ─── Tool Context ──────────────────────────────────────────────────────────────
+
+export interface ToolContext {
+  /** The original messages from the request */
+  messages: unknown[];
+  /** The current turn number in the execution loop */
   turn: number;
+  /** The model being used */
   model: string;
-  state: Record<string, unknown>;
+  /** Custom state or services can be attached here */
+  [key: string]: any;
 }
 
 // ─── Tool Registration ─────────────────────────────────────────────────────────
@@ -177,12 +197,8 @@ export interface ToolRegistration {
 // ─── Tool Policy ───────────────────────────────────────────────────────────────
 
 export interface ToolPolicy {
-  /** Maximum times this tool can be called per agent run */
   maxCallsPerRun?: number;
-  /** Whether this tool requires explicit user approval */
   requiresApproval?: boolean;
-  /** Rate limit: max calls per minute */
   rateLimit?: number;
-  /** Allowed contexts (e.g., only in certain conversation states) */
   allowedContexts?: string[];
 }

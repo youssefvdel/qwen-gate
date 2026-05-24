@@ -20,8 +20,7 @@ export const logHtml = `<!DOCTYPE html>
   .stat strong { color: #f0f6fc; }
 
   .entry { background: #161b22; border: 1px solid #30363d; border-radius: 8px; margin-bottom: 16px; overflow: hidden; }
-  .entry-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; background: #1c2128; border-bottom: 1px solid #30363d; cursor: pointer; }
-  .entry-header:hover { background: #21262d; }
+  .entry-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; background: #1c2128; border-bottom: 1px solid #30363d; }
   .entry-header .model { font-weight: 600; color: #58a6ff; }
   .entry-header .time { font-size: 0.8rem; color: #8b949e; }
   .entry-header .badge { font-size: 0.7rem; padding: 2px 8px; border-radius: 10px; margin-left: 8px; }
@@ -29,8 +28,7 @@ export const logHtml = `<!DOCTYPE html>
   .badge-stream { background: #23863633; color: #3fb950; border: 1px solid #23863666; }
   .badge-errors { background: #da363333; color: #f85149; border: 1px solid #da363366; }
 
-  .entry-body { padding: 12px 16px; display: none; }
-  .entry.open .entry-body { display: block; }
+  .entry-body { padding: 12px 16px; }
 
   .section { margin-bottom: 12px; }
   .section-title { font-size: 0.8rem; font-weight: 600; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
@@ -103,8 +101,8 @@ function renderEntry(entry, isNew) {
 
   let html = '<div class="entry' + (isNew ? ' entry-new' : '') + '" data-id="' + entry.id + '">';
   
-  // Header — click handler via JS listener, not inline onclick (avoids quote escaping issues)
-  html += '<div class="entry-header" data-toggle="open">';
+  // Header
+  html += '<div class="entry-header">';
   html += '<div><span class="model">' + escapeHtml(entry.model) + '</span>';
   if (hasTools) html += '<span class="badge badge-tools">' + entry.parsedToolCalls.length + ' tool' + (entry.parsedToolCalls.length > 1 ? 's' : '') + '</span>';
   if (hasErrors) html += '<span class="badge badge-errors">' + entry.errors.length + ' error' + (entry.errors.length > 1 ? 's' : '') + '</span>';
@@ -143,18 +141,34 @@ function renderEntry(entry, isNew) {
     html += escapeHtml(rawContent.length > 2000 ? rawContent.slice(0, 2000) + '\\n... [truncated]' : rawContent);
     html += '</div></div>';
     
-    // Right: processed output (tool calls + remaining text)
-    html += '<div><div class="proc-label">PROCESSED — after parsing</div><div class="proc-output">';
-    if (entry.parsedToolCalls && entry.parsedToolCalls.length > 0) {
-      for (const tc of entry.parsedToolCalls) {
-        html += '<span style="color:#58a6ff;font-weight:600;">→ Tool call:</span> ' + escapeHtml(tc.name) + '(' + escapeHtml(tc.args ? tc.args.slice(0, 300) : '') + ')\\n';
+    // Right: processed output (what client actually received)
+    html += '<div><div class="proc-label">PROCESSED — sent to client</div><div class="proc-output">';
+    if (entry.processedApiOutput) {
+      // Show tool calls separately if present
+      if (entry.parsedToolCalls && entry.parsedToolCalls.length > 0) {
+        for (const tc of entry.parsedToolCalls) {
+          html += '<span style="color:#58a6ff;font-weight:600;">→ Tool call:</span> ' + escapeHtml(tc.name) + '(' + escapeHtml(tc.args ? tc.args.slice(0, 300) : '') + ')\\n';
+        }
+        if (entry.processedApiOutput.trim()) {
+          html += '\\n<span style="color:#8b949e;">— content —</span>\\n';
+          html += escapeHtml(entry.processedApiOutput.slice(0, 1500));
+        }
+      } else {
+        html += escapeHtml(entry.processedApiOutput.slice(0, 2000));
       }
-    }
-    if (entry.remainingText) {
-      html += escapeHtml(entry.remainingText.slice(0, 1000));
-    }
-    if ((!entry.parsedToolCalls || entry.parsedToolCalls.length === 0) && !entry.remainingText) {
-      html += '<span class="empty">(no tool calls or remaining content captured)</span>';
+    } else {
+      // Fallback: reconstruct from parsed data
+      if (entry.parsedToolCalls && entry.parsedToolCalls.length > 0) {
+        for (const tc of entry.parsedToolCalls) {
+          html += '<span style="color:#58a6ff;font-weight:600;">→ Tool call:</span> ' + escapeHtml(tc.name) + '(' + escapeHtml(tc.args ? tc.args.slice(0, 300) : '') + ')\\n';
+        }
+      }
+      if (entry.remainingText) {
+        html += escapeHtml(entry.remainingText.slice(0, 1000));
+      }
+      if ((!entry.parsedToolCalls || entry.parsedToolCalls.length === 0) && !entry.remainingText) {
+        html += '<span class="empty">(no tool calls or remaining content captured)</span>';
+      }
     }
     html += '</div></div>';
     
@@ -181,7 +195,8 @@ function renderEntry(entry, isNew) {
   if (entry.finalResponse) {
     html += '<div class="section"><div class="section-title">Proxy → Client</div>';
     html += '<div class="kv">';
-    html += '<dt>finish_reason</dt><dd class="finish-' + entry.finalResponse.finishReason + '">' + entry.finalResponse.finishReason + '</dd>';
+    const safeFinishReason = (['stop', 'tool_calls', 'error', 'length', 'content_filter'].includes(entry.finalResponse.finishReason)) ? entry.finalResponse.finishReason : 'stop';
+    html += '<dt>finish_reason</dt><dd class="finish-' + safeFinishReason + '">' + escapeHtml(entry.finalResponse.finishReason) + '</dd>';
     html += '<dt>tool calls</dt><dd>' + entry.finalResponse.toolCallCount + '</dd>';
     html += '<dt>content</dt><dd>' + escapeHtml(entry.finalResponse.contentPreview ? entry.finalResponse.contentPreview.slice(0, 200) : '') + '</dd>';
     html += '</div></div>';
@@ -199,12 +214,6 @@ function renderEntry(entry, isNew) {
   html += '</div></div>';
   return html;
 }
-
-// Click handler for expanding entries (delegated, avoids inline onclick escaping issues)
-document.addEventListener('click', function(e) {
-  const header = e.target.closest('[data-toggle="open"]');
-  if (header) header.parentElement.classList.toggle('open');
-});
 
 // Connect to SSE stream for live updates
 const evtSource = new EventSource('/log/stream');
