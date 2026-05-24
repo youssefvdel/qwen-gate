@@ -2,13 +2,12 @@ import { Context } from 'hono';
 import { stream as honoStream } from 'hono/streaming';
 import { v4 as uuidv4 } from 'uuid';
 import { createQwenStream } from '../services/qwen.ts';
-import { OpenAIRequest, ChoiceDelta, Message } from '../utils/types.ts';
-import { registry } from '../tools/registry.ts';
+import { OpenAIRequest, Message } from '../utils/types.ts';
 import type { FunctionToolDefinition } from '../tools/types.ts';
 import { robustParseJSON } from '../utils/json.ts';
 import { StreamingToolParser } from '../tools/parser.ts';
 import { validateSingleToolCall } from '../tools/guard.ts';
-import { filterContent } from '../utils/contentFilter.ts';
+import { filterContent, stripToolCallArtifacts } from '../utils/contentFilter.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import modelSpecs from '../models.json' with { type: 'json' };
 import { logStore } from '../services/logStore.ts';
@@ -46,17 +45,104 @@ function safeTruncate(val: any, maxLen = 200): any {
   return val;
 }
 
-function commonPrefixLen(a: string, b: string): number {
+export function commonPrefixLen(a: string, b: string): number {
   let i = 0;
   const len = Math.min(a.length, b.length);
   while (i < len && a[i] === b[i]) i++;
   return i;
 }
 
-function getNewContent(text: string, lastEmittedText: string): string {
+export function getNewContent(text: string, lastEmittedText: string): string {
   if (!text) return '';
   const commonLen = commonPrefixLen(text, lastEmittedText);
   if (commonLen < text.length) return text.substring(commonLen);
+  return '';
+}
+
+export function commonSuffixLen(a: string, b: string): number {
+  let i = 0;
+  const len = Math.min(a.length, b.length);
+  while (i < len && a[a.length - 1 - i] === b[b.length - 1 - i]) i++;
+  return i;
+}
+
+/**
+ * Robust cumulative chunk detection. Qwen sometimes sends the full growing text
+ * in each chunk instead of incremental deltas. Prefix-only detection fails when
+ * the filter reclassifies early content (changing the prefix). This fallback
+ * checks if the new text contains the old text as a substring — if yes, it's
+ * cumulative and we extract the delta from the end.
+ *
+ * Returns: { cumulative: boolean, delta: string }
+ *   - cumulative=true: newText contains lastText, delta is the new tail
+ *   - cumulative=false: treat as incremental or duplicate
+ */
+export function detectCumulativeChunk(
+  newText: string,
+  lastText: string
+): { cumulative: boolean; delta: string } {
+  if (!lastText || !newText) return { cumulative: false, delta: newText };
+
+  // Fast path: exact duplicate or subset
+  if (newText === lastText || lastText.startsWith(newText)) {
+    return { cumulative: false, delta: '' };
+  }
+
+  // Fast path: clean prefix match (existing behavior)
+  const prefixLen = commonPrefixLen(newText, lastText);
+  if (prefixLen >= Math.min(8, lastText.length) && newText.length > lastText.length) {
+    return { cumulative: true, delta: newText.substring(lastText.length) };
+  }
+
+  // Fallback: suffix containment — does newText contain lastText anywhere?
+  // This handles the case where filter reclassified early content, changing the prefix,
+  // but the bulk of lastText still appears in newText.
+  if (newText.length > lastText.length && lastText.length >= 16) {
+    // Use the LAST 64 chars of lastText as a fingerprint (avoid short false matches)
+    const fingerprint = lastText.slice(-Math.min(64, lastText.length));
+    const idx = newText.indexOf(fingerprint);
+    if (idx !== -1) {
+      // Found the fingerprint. The delta is everything after the end of where
+      // lastText would end if it appeared at this position.
+      const expectedEnd = idx + lastText.length;
+      if (expectedEnd <= newText.length) {
+        // Verify: check that newText starting at idx matches lastText closely enough
+        // (allow for filter reclassification at the very start, up to 200 chars divergence)
+        const candidateRegion = newText.substring(idx, idx + lastText.length);
+        const suffixMatch = commonSuffixLen(candidateRegion, lastText);
+        if (suffixMatch >= Math.min(lastText.length * 0.7, lastText.length - 8)) {
+          // 70%+ suffix match → it's cumulative
+          const delta = newText.substring(expectedEnd);
+          return { cumulative: true, delta };
+        }
+      }
+    }
+  }
+
+  return { cumulative: false, delta: newText };
+}
+
+/**
+ * Suffix-aware snapshot diff: if the filter reclassified early content (changing
+ * the prefix), use the longest common SUFFIX to find what's genuinely new at
+ * the end. Falls back to detectCumulativeChunk for robustness.
+ */
+function getSnapshotDelta(newSnapshot: string, lastSnapshot: string): string {
+  if (!newSnapshot) return '';
+  if (!lastSnapshot) return newSnapshot;
+  if (newSnapshot === lastSnapshot) return '';
+
+  if (newSnapshot.length <= lastSnapshot.length) {
+    return '';
+  }
+
+  if (newSnapshot.startsWith(lastSnapshot)) {
+    return newSnapshot.substring(lastSnapshot.length);
+  }
+
+  const detection = detectCumulativeChunk(newSnapshot, lastSnapshot);
+  if (detection.cumulative) return detection.delta;
+
   return '';
 }
 
@@ -66,42 +152,31 @@ function cleanThinkTags(t: string): string {
 
 // Always-injected tool calling format instruction — model must know the format even when no tools are provided
 // so it can handle tool calls in multi-turn conversations correctly.
+// HIGHEST PRIORITY: This is the #1 rule. Incorrect format breaks the streaming pipeline.
+// Only the correct JSON format is shown. Never mention alternative formats —
+// showing them teaches the model about them and increases the chance they get used.
 const TOOL_FORMAT_INSTRUCTION = `
-## OUTPUT RULES
-
-### ALWAYS DO
-1. Output tool calls as pure JSON: {"name": "tool_name", "arguments": {"key": "value"}}
-2. Keep "name" as a string and "arguments" as a JSON object
-3. Output multiple tool calls on separate lines, one JSON object per line
-4. Output text answers directly as plain text — no special formatting
-5. Think internally before answering — your reasoning stays private
-
-### NEVER DO
-1. NEVER output <think>, </think>, <thinking>, <thought>, or any XML tags
-2. NEVER wrap tool calls in markdown fences (\`\`\`json) or XML tags
-3. NEVER prefix answers with "Thinking:", "I am evaluating", "Let me", or reasoning text
-4. NEVER output "arguments" as a JSON string — it must be a JSON object
-5. NEVER output "name" as anything other than a plain string
-
-### BLOCKED FORMATS — NEVER USE THESE
-<tool_call>{"name": "read_file", "arguments": {}}</tool_call>
-<tool_use>{"name": "read_file", "arguments": {}}</tool_use>
-<function_call>{"name": "read_file", "arguments": {}}</function_call>
-<function_calls><invoke name="read_file"><parameter name="path">f.txt</parameter></invoke></function_calls>
-\`\`\`json\n{"name": "read_file", "arguments": {}}\n\`\`\`
+## OUTPUT RULES — HIGHEST PRIORITY
 
 ### CORRECT FORMAT
+When calling a tool, output ONLY a single line of raw JSON:
 {"name": "read_file", "arguments": {"path": "src/main.ts"}}
 {"name": "glob", "arguments": {"pattern": "**/*.ts"}}
 {"name": "bash", "arguments": {"command": "ls -la"}}
 
-### WRONG FORMAT
-<tool_call>{"name": "read_file", "arguments": {"path": "file.txt"}}</tool_call>
-\`\`\`json
-{"name": "read_file", "arguments": {"path": "file.txt"}}
-\`\`\`
-{"name": "read_file", "arguments": "{\\"path\\": \\"file.txt\\"}"}
-Thinking: I should read the file... {"name": "read_file", ...}
+### RULES
+1. "name" must be a plain string — the tool name
+2. "arguments" must be a JSON object — not a string, not a number
+3. Output each tool call on its own line, one JSON object per line
+4. Output text answers as plain text with no special formatting
+5. Your private reasoning is never shown to the user — answer directly
+6. Do not prefix answers with "Thinking:", "I am", "Let me", or any reasoning text
+
+
+### CRITICAL
+Never wrap tool calls in fences or backticks.
+Never output raw JSON with text around it.
+This is the highest priority rule — incorrect format causes cascading failures.
 `;
 
 function parseQwenErrorPayload(raw: string): { message: string; status: number } | null {
@@ -259,10 +334,16 @@ export async function chatCompletions(c: Context) {
       }
     }
 
-    if (toolCalling) systemPrompt += TOOL_FORMAT_INSTRUCTION;
+    // Global anti-XML instruction — always inject when tool calling is enabled,
+    // even without tools in the current request. Prevents the model from
+    // outputting XML-wrapped tool calls from its training data.
+    if (toolCalling) {
+      systemPrompt += `\n\nCRITICAL: Never use XML tags (like ,) for tool calls or structured output. Always use plain JSON.\n\n`;
+    }
 
     // Inject tools available and tool_choice if provided
     if (bodyAny.tools && Array.isArray(bodyAny.tools) && bodyAny.tools.length > 0) {
+      if (toolCalling) systemPrompt += TOOL_FORMAT_INSTRUCTION;
       // Better formatting for tools
       const formattedTools = bodyAny.tools.map((t: any) => {
         if (t.type === 'function') {
@@ -348,7 +429,6 @@ export async function chatCompletions(c: Context) {
       let currentThoughtIndex = 0;
       let reasoningBuffer = '';
       let lastFullContent = '';
-      let lastEmittedText = '';
       let targetResponseId: string | null = null;
       const toolParser = new StreamingToolParser();
       if (!toolCalling) toolParser.passThrough = true;
@@ -418,7 +498,6 @@ export async function chatCompletions(c: Context) {
                 isThinkingChunk = false;
                 if (delta.content !== undefined) {
                   vStr = delta.content || '';
-                  lastFullContent += delta.content || '';
                   if (vStr) {
                     foundStr = true;
                   }
@@ -431,10 +510,8 @@ export async function chatCompletions(c: Context) {
               if (isThinkingChunk) {
                 reasoningBuffer += vStr;
               } else {
-                if (vStr.includes('"name"') || vStr.includes('{')) {
-                  logStore.addRawChunk(logId, vStr);
-                  logStore.updateEntry(logId, entry => { entry.rawFullContent += vStr; });
-                }
+                // Log ALL raw chunks from Qwen, not just ones with JSON markers
+                logStore.addRawChunk(logId, vStr);
                 if (process.env.DEBUG && (vStr.includes('"name"'))) {
                   logDebug('QWEN RAW CHUNK (non-streaming)', vStr);
                 }
@@ -442,10 +519,24 @@ export async function chatCompletions(c: Context) {
                 if (thinking) {
                   reasoningBuffer += thinking;
                 }
-                if (contentFiltering && parserText) {
-                  const { thinking: chunkThinking } = filterContent(parserText);
-                  if (chunkThinking) {
-                    reasoningBuffer = reasoningBuffer ? reasoningBuffer + '\n' + chunkThinking : chunkThinking;
+                // Accumulate parser-extracted text without per-chunk filtering.
+                // Filtering happens once at the end to avoid over-filtering
+                // content that looks like thinking in isolation but is clearly
+                // answer content in context.
+                // Cumulative detection: if parserText already contains lastFullContent
+                // as prefix, it's a cumulative chunk — replace instead of append.
+                if (parserText) {
+                  if (lastFullContent.length > 0) {
+                    const detection = detectCumulativeChunk(parserText, lastFullContent);
+                    if (detection.cumulative) {
+                      lastFullContent = parserText;
+                    } else if (detection.delta === '') {
+                      // Duplicate — skip
+                    } else {
+                      lastFullContent += parserText;
+                    }
+                  } else {
+                    lastFullContent = parserText;
                   }
                 }
                 for (const tc of toolCalls) {
@@ -523,12 +614,16 @@ export async function chatCompletions(c: Context) {
         total_tokens: promptTokens + completionTokens,
         prompt_tokens_details: { cached_tokens: 0 }
       };
-      const { cleanText: filteredContent, thinking: filteredReasoning } = contentFiltering
+      const { cleanText: baseFilteredContent, thinking: filteredReasoning } = contentFiltering
         ? filterContent(lastFullContent)
         : { cleanText: lastFullContent, thinking: '' };
       if (filteredReasoning) {
         reasoningBuffer = reasoningBuffer ? reasoningBuffer + '\n' + filteredReasoning : filteredReasoning;
       }
+      // Safety net: strip any remaining JSON tool calls or Tool Response echoes
+      // from the content before sending to the client. This catches any tool
+      // call artifacts that the streaming parser might have missed.
+      const filteredContent = stripToolCallArtifacts(baseFilteredContent);
       const message: any = { role: 'assistant', content: toolCallsOut.length ? null : filteredContent };
       if (reasoningBuffer) message.reasoning_content = reasoningBuffer;
       if (toolCallsOut.length) toolCallsOut.forEach((tc, idx) => tc.index = idx);
@@ -541,6 +636,7 @@ export async function chatCompletions(c: Context) {
           contentPreview: lastFullContent.length > 500 ? lastFullContent.substring(0, 500) + '...' : lastFullContent,
         };
         entry.remainingText = lastFullContent.length > 500 ? lastFullContent.substring(0, 500) + '...' : lastFullContent;
+        entry.processedApiOutput = filteredContent;
         if (correctionPrompts.length > 0) entry.errors.push(...correctionPrompts);
       });
 
@@ -555,6 +651,9 @@ export async function chatCompletions(c: Context) {
       }
 
       sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail);
+      // Persist raw vs processed output for debugging
+      const logEntry = logStore.getRecent(1).find(e => e.id === logId);
+      if (logEntry) logStore.persistRequest(logEntry);
       return c.json({
         id: completionId,
         object: 'chat.completion',
@@ -619,9 +718,24 @@ export async function chatCompletions(c: Context) {
       let currentAppendPath = '';
       
       let reasoningBuffer = '';
-      let lastEmittedText = '';
-      let lastEmittedThinking = '';
       let lastFullContent = '';
+      let lastRawContent = '';  // pre-parser cumulative tracking
+      // Snapshot-based diffing: track the full filtered text from the previous
+      // iteration rather than accumulating emitted deltas. This prevents the
+      // exponential amplification bug where filterContent() reclassifying early
+      // content (e.g., "I am analyzing..." → thinking) changes the prefix,
+      // causing getNewContent() to re-emit the entire text as "new".
+      let lastFilteredSnapshot = '';
+      let lastThinkingSnapshot = '';
+      // O(n²) → O(n) filter cache: only re-run filterContent() when lastFullContent
+      // actually grows. Pure function on same input = same output, so cache is safe.
+      let lastFilteredLength = -1;
+      let cachedBaseFiltered = '';
+      let cachedFilteredThinking = '';
+      let cachedFullFilteredText = '';
+      // Pre-parser cumulative tracking: detect cumulative vStr BEFORE feeding parser
+      // to prevent parser buffer from growing quadratically.
+      let lastVStrRaw = '';
       let targetResponseId: string | null = null;
       const toolParser = new StreamingToolParser();
       if (!toolCalling) toolParser.passThrough = true;
@@ -632,12 +746,11 @@ export async function chatCompletions(c: Context) {
       let promptTokens = Math.ceil(finalPrompt.length / 3.5);
       let streamDone = false;
 
-      // ── Diagnostic timestamps for stream close investigation ──
-      let lastChunkAt = 0;       // last time reader.read() returned data
-      let upstreamDoneAt = 0;    // when reader returned done: true (TCP close)
-      let qwenDoneSignalAt = 0;  // when 'data: [DONE]' seen in SSE from Qwen
-      let firstChunkAt = 0;
-      let totalChunks = 0;
+      // Amplification guard: track raw input bytes vs emitted output bytes.
+      // If emitted > raw*3 + 1000, suppress further text emission.
+      let rawInputBytes = 0;
+      let emittedOutputBytes = 0;
+      let amplificationGuardTriggered = false;
 
       while (true) {
         if (streamDone) break;
@@ -654,14 +767,11 @@ export async function chatCompletions(c: Context) {
         }
 
         if (done) {
-          upstreamDoneAt = Date.now();
-          console.log(`[Chat][timing] upstream reader done=true. lastChunk=${lastChunkAt ? ((upstreamDoneAt - lastChunkAt) + 'ms after last chunk') : 'never got chunk'}. totalChunks=${totalChunks}`);
+          console.log(`[Chat] account=${resolvedEmail} chunks=${totalChunks} upstream stream ended`);
           break;
         }
-        const now = Date.now();
-        if (!firstChunkAt) firstChunkAt = now;
-        lastChunkAt = now;
         totalChunks++;
+        if (value) rawInputBytes += value.length;
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
@@ -674,8 +784,6 @@ export async function chatCompletions(c: Context) {
           const dataStr = trimmed.slice(6);
           if (dataStr === '[DONE]') {
             streamDone = true;
-            qwenDoneSignalAt = Date.now();
-            console.log(`[Chat][timing] Qwen sent data: [DONE]. lastChunk=${(qwenDoneSignalAt - lastChunkAt)}ms ago. streamAge=${(qwenDoneSignalAt - firstChunkAt)}ms`);
             break;
           }
 
@@ -685,12 +793,8 @@ export async function chatCompletions(c: Context) {
             if (chunk.choices?.[0]?.delta?.status === 'finished') {
               const deltaPhase = chunk.choices[0].delta.phase;
               // 'thinking_summary' finished just means thinking is done — content (answer) comes next.
-              if (deltaPhase === 'thinking_summary') {
-                console.log(`[Chat][timing] Qwen thinking_summary phase finished, waiting for answer...`);
-              } else {
+              if (deltaPhase !== 'thinking_summary') {
                 streamDone = true;
-                qwenDoneSignalAt = Date.now();
-                console.log(`[Chat][timing] Qwen sent status=finished (phase=${deltaPhase || 'none'}). lastChunk=${(qwenDoneSignalAt - lastChunkAt)}ms ago. streamAge=${(qwenDoneSignalAt - firstChunkAt)}ms`);
                 break;
               }
             }
@@ -762,14 +866,30 @@ export async function chatCompletions(c: Context) {
                 // content has been parsed.
                 if (/^[\n\s]*<\/?(?:think|thinking|thought|tool_call|tool_use|function_call)[\s>]*[\n\s]*$/.test(vStr)) continue;
 
-                if (vStr.includes('"name"') || vStr.includes('{')) {
-                  logStore.addRawChunk(logId, vStr);
-                  logStore.updateEntry(logId, entry => { entry.rawFullContent += vStr; });
-                }
+                // Log ALL raw chunks from Qwen, not just ones with JSON markers
+                logStore.addRawChunk(logId, vStr);
                 if (process.env.DEBUG && (vStr.includes('"name"'))) {
                   logDebug('QWEN RAW CHUNK (streaming)', vStr);
                 }
-                const { text: rawText, toolCalls, thinking: parserThinking } = toolParser.feed(vStr);
+                // Pre-parser cumulative detection on vStr: if vStr contains lastVStrRaw
+                // as prefix or suffix, extract only delta to prevent parser buffer bloat.
+                let feedStr = vStr;
+                if (lastVStrRaw.length > 0) {
+                  const detection = detectCumulativeChunk(vStr, lastVStrRaw);
+                  if (detection.cumulative) {
+                    feedStr = detection.delta;
+                    lastVStrRaw = vStr;
+                  } else if (detection.delta === '') {
+                    // Duplicate vStr — skip parser feed entirely
+                    feedStr = '';
+                  } else {
+                    // Incremental vStr
+                    lastVStrRaw += vStr;
+                  }
+                } else {
+                  lastVStrRaw = vStr;
+                }
+                const { text: rawText, toolCalls, thinking: parserThinking } = feedStr ? toolParser.feed(feedStr) : { text: '', toolCalls: [], thinking: '' };
 
                 if (toolCalls.length) {
                   logStore.updateEntry(logId, entry => {
@@ -782,11 +902,44 @@ export async function chatCompletions(c: Context) {
                   logDebug('PARSED TOOL CALLS (streaming)', toolCalls.map(tc => ({ name: tc.name, arguments: tc.arguments })));
                 }
 
-                if (rawText) lastFullContent += rawText;
+                if (rawText) {
+                  // Pre-parser cumulative detection: Qwen sometimes sends the full
+                  // growing text in each chunk instead of incremental deltas.
+                  // Detect this BEFORE accumulating into lastFullContent to prevent
+                  // the parser buffer from growing quadratically.
+                  if (lastRawContent.length > 0) {
+                    const detection = detectCumulativeChunk(rawText, lastRawContent);
+                    if (detection.cumulative) {
+                      lastRawContent = rawText;
+                      lastFullContent += detection.delta;
+                    } else if (detection.delta === '') {
+                      // Duplicate/retry — skip
+                    } else {
+                      // Incremental chunk
+                      lastRawContent += rawText;
+                      lastFullContent += rawText;
+                    }
+                  } else {
+                    lastRawContent = rawText;
+                    lastFullContent = rawText;
+                  }
+                }
 
-                const { cleanText: fullFilteredText, thinking: filteredThinking } = (contentFiltering && lastFullContent)
-                  ? filterContent(lastFullContent)
-                  : { cleanText: lastFullContent || '', thinking: '' };
+                // Apply content filtering with O(n²) → O(n) cache: only re-run
+                // filterContent() when lastFullContent length changes. Pure function
+                // on same input = same output, so cache is safe.
+                if (lastFullContent.length !== lastFilteredLength) {
+                  const { cleanText, thinking } = (contentFiltering && lastFullContent)
+                    ? filterContent(lastFullContent)
+                    : { cleanText: lastFullContent || '', thinking: '' };
+                  cachedBaseFiltered = cleanText;
+                  cachedFilteredThinking = thinking;
+                  cachedFullFilteredText = stripToolCallArtifacts(cleanText);
+                  lastFilteredLength = lastFullContent.length;
+                }
+                const baseFilteredContent = cachedBaseFiltered;
+                const filteredThinking = cachedFilteredThinking;
+                const fullFilteredText = cachedFullFilteredText;
 
                 // Emit parser-captured thinking first (from <think> tags)
                 if (parserThinking) {
@@ -799,11 +952,12 @@ export async function chatCompletions(c: Context) {
                   });
                 }
 
-                // Emit filter-captured thinking as reasoning_content (delta only)
+                // Snapshot-based thinking emission: compare full current thinking
+                // against previous snapshot instead of accumulating deltas.
                 if (filteredThinking) {
-                  const thinkingDelta = getNewContent(filteredThinking, lastEmittedThinking);
+                  const thinkingDelta = getSnapshotDelta(filteredThinking, lastThinkingSnapshot);
+                  lastThinkingSnapshot = filteredThinking;
                   if (thinkingDelta) {
-                    lastEmittedThinking += thinkingDelta;
                     await writeEvent({
                       id: completionId,
                       object: 'chat.completion.chunk',
@@ -819,10 +973,37 @@ export async function chatCompletions(c: Context) {
                   ? cleanThinkTags(pendingText)
                   : (fullFilteredText ? cleanThinkTags(fullFilteredText) : null);
 
+                // Snapshot-based content emission: compare full current filtered text
+                // against previous snapshot. This is the key fix — even if the filter
+                // reclassifies early content and changes the prefix, we only emit what
+                // is genuinely new relative to the previous snapshot.
                 if (cleanedText && !pendingText) {
-                  const contentDelta = getNewContent(cleanedText, lastEmittedText);
+                  const contentDelta = getSnapshotDelta(cleanedText, lastFilteredSnapshot);
+                  lastFilteredSnapshot = cleanedText;
                   if (contentDelta) {
-                    lastEmittedText += contentDelta;
+                    if (!amplificationGuardTriggered) {
+                      const projectedRatio =
+                        (emittedOutputBytes + contentDelta.length) / Math.max(1, rawInputBytes);
+                      if (projectedRatio > 3 && emittedOutputBytes > 1000) {
+                        amplificationGuardTriggered = true;
+                        const ratio = Math.round(projectedRatio * 100) / 100;
+                        console.error(
+                          `[Chat][AMPLIFICATION GUARD] Triggered! ratio=${ratio}x ` +
+                          `rawIn=${rawInputBytes}B emittedOut=${emittedOutputBytes}B ` +
+                          `account=${resolvedEmail} model=${body.model}`
+                        );
+                        logStore.recordAmplificationEvent(
+                          logId,
+                          ratio,
+                          lastRawContent || lastVStrRaw || ''
+                        );
+                      }
+                    }
+                    if (amplificationGuardTriggered) {
+                      continue;
+                    }
+                    logStore.addProcessedOutput(logId, contentDelta);
+                    emittedOutputBytes += contentDelta.length;
                     await writeEvent({
                       id: completionId,
                       object: 'chat.completion.chunk',
@@ -867,9 +1048,32 @@ export async function chatCompletions(c: Context) {
                 // Only send text if all tool calls passed guard validation.
                 // If any failed, suppress the text to prevent polluting client context.
                 if (pendingText && allToolCallsValid && cleanedText) {
-                  const contentDelta = getNewContent(cleanedText, lastEmittedText);
+                  const contentDelta = getSnapshotDelta(cleanedText, lastFilteredSnapshot);
+                  lastFilteredSnapshot = cleanedText;
                   if (contentDelta) {
-                    lastEmittedText += contentDelta;
+                    if (!amplificationGuardTriggered) {
+                      const projectedRatio =
+                        (emittedOutputBytes + contentDelta.length) / Math.max(1, rawInputBytes);
+                      if (projectedRatio > 3 && emittedOutputBytes > 1000) {
+                        amplificationGuardTriggered = true;
+                        const ratio = Math.round(projectedRatio * 100) / 100;
+                        console.error(
+                          `[Chat][AMPLIFICATION GUARD] Triggered! ratio=${ratio}x ` +
+                          `rawIn=${rawInputBytes}B emittedOut=${emittedOutputBytes}B ` +
+                          `account=${resolvedEmail} model=${body.model}`
+                        );
+                        logStore.recordAmplificationEvent(
+                          logId,
+                          ratio,
+                          lastRawContent || lastVStrRaw || ''
+                        );
+                      }
+                    }
+                    if (amplificationGuardTriggered) {
+                      continue;
+                    }
+                    logStore.addProcessedOutput(logId, contentDelta);
+                    emittedOutputBytes += contentDelta.length;
                     await writeEvent({
                       id: completionId,
                       object: 'chat.completion.chunk',
@@ -923,28 +1127,70 @@ export async function chatCompletions(c: Context) {
           choices: [makeChoice({ reasoning_content: remainingThinking })]
         });
       }
-      const { cleanText: flushCleanText, thinking: flushThinking } = (contentFiltering && remainingText)
-        ? filterContent(remainingText)
-        : { cleanText: remainingText || '', thinking: '' };
-      if (flushThinking) {
-        await writeEvent({
-          id: completionId,
-          object: 'chat.completion.chunk',
-          created: Math.floor(Date.now() / 1000),
-          model: body.model,
-          choices: [makeChoice({ reasoning_content: flushThinking })]
-        });
+      // Flush remaining text via snapshot diffing — avoid double-emitting content
+      // already streamed. Compare the final full filtered text against the last
+      // snapshot to emit only genuinely new content.
+      if (remainingText) {
+        lastFullContent += remainingText;
       }
-      if (flushCleanText) {
-        const ct = flushCleanText.replace(/[\n\s]*$/, '');
-        if (ct) {
+      const { cleanText: flushBase, thinking: flushThinking } = (contentFiltering && lastFullContent)
+        ? filterContent(lastFullContent)
+        : { cleanText: lastFullContent || '', thinking: '' };
+      const flushFiltered = stripToolCallArtifacts(flushBase);
+      const flushCleaned = cleanThinkTags(flushFiltered);
+
+      if (flushThinking) {
+        const thinkDelta = getSnapshotDelta(flushThinking, lastThinkingSnapshot);
+        if (thinkDelta) {
+          lastThinkingSnapshot = flushThinking;
           await writeEvent({
             id: completionId,
             object: 'chat.completion.chunk',
             created: Math.floor(Date.now() / 1000),
             model: body.model,
-            choices: [makeChoice({ content: ct })]
+            choices: [makeChoice({ reasoning_content: thinkDelta })]
           });
+        }
+      }
+      if (flushCleaned) {
+        const contentDelta = getSnapshotDelta(flushCleaned, lastFilteredSnapshot);
+        if (contentDelta) {
+          // Amplification guard on flush emission
+          if (!amplificationGuardTriggered) {
+            const projectedRatio =
+              (emittedOutputBytes + contentDelta.length) / Math.max(1, rawInputBytes);
+            if (projectedRatio > 3 && emittedOutputBytes > 1000) {
+              amplificationGuardTriggered = true;
+              const ratio = Math.round(projectedRatio * 100) / 100;
+              console.error(
+                `[Chat][AMPLIFICATION GUARD] Triggered on flush! ratio=${ratio}x ` +
+                `rawIn=${rawInputBytes}B emittedOut=${emittedOutputBytes}B ` +
+                `account=${resolvedEmail} model=${body.model}`
+              );
+              logStore.recordAmplificationEvent(
+                logId,
+                ratio,
+                lastRawContent || lastVStrRaw || ''
+              );
+            }
+          }
+          if (amplificationGuardTriggered) {
+            lastFilteredSnapshot = flushCleaned;
+          } else {
+            lastFilteredSnapshot = flushCleaned;
+            const ct = contentDelta.replace(/[\n\s]*$/, '');
+            if (ct) {
+              logStore.addProcessedOutput(logId, ct);
+              emittedOutputBytes += ct.length;
+              await writeEvent({
+                id: completionId,
+                object: 'chat.completion.chunk',
+                created: Math.floor(Date.now() / 1000),
+                model: body.model,
+                choices: [makeChoice({ content: ct })]
+              });
+            }
+          }
         }
       }
       for (const tc of remainingToolCalls) {
@@ -1005,10 +1251,22 @@ export async function chatCompletions(c: Context) {
           usage
         });
       }
-      const doneWriteAt = Date.now();
-      console.log(`[Chat][timing] Writing data: [DONE] to client. sinceLastChunk=${lastChunkAt ? (doneWriteAt - lastChunkAt) + 'ms' : 'N/A'} sinceUpstreamDone=${upstreamDoneAt ? (doneWriteAt - upstreamDoneAt) + 'ms' : 'N/A (never done=true)'} sinceQwenDone=${qwenDoneSignalAt ? (doneWriteAt - qwenDoneSignalAt) + 'ms' : 'N/A (never sent [DONE])'} totalChunks=${totalChunks}`);
       await streamWriter.write('data: [DONE]\n\n');
-      console.log(`[Chat][timing] data: [DONE] written (await resolved). writeTook=${Date.now() - doneWriteAt}ms`);
+
+      // Log final amplification ratio for observability
+      const finalRatio =
+        rawInputBytes > 0 ? Math.round((emittedOutputBytes / rawInputBytes) * 100) / 100 : 0;
+      if (finalRatio > 2) {
+        console.warn(
+          `[Chat] High amplification ratio: ${finalRatio}x ` +
+          `(rawIn=${rawInputBytes}B, out=${emittedOutputBytes}B) account=${resolvedEmail}`
+        );
+        logStore.updateEntry(logId, (entry) => {
+          entry.amplificationRatio = finalRatio;
+        });
+      }
+
+      console.log(`[Chat] account=${resolvedEmail} chunks=${totalChunks} stream complete`);
 
       // Capture cleanup refs for deferred background cleanup.
       // DO NOT do anything else here — callback must return ASAP so Hono
@@ -1027,11 +1285,13 @@ export async function chatCompletions(c: Context) {
         try { _cleanupReader.cancel(); } catch {}
         try { _cleanupReader.releaseLock(); } catch {}
         sessionPool.release(_cleanupChatId, _cleanupParentId, _cleanupHeaders, _cleanupEmail);
+        // Persist raw vs processed output for debugging
+        const entry = logStore.getRecent(1).find(e => e.id === logId);
+        if (entry) logStore.persistRequest(entry);
       }, 200);
 
       } finally {
         clearInterval(heartbeatInterval);
-        console.log(`[Chat][timing] Callback returning. Hono will close HTTP response now. totalChunks=${totalChunks}`);
       }
     });
   } catch (err: any) {

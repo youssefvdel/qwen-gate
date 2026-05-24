@@ -2,7 +2,7 @@ import { getQwenHeaders, getBasicHeaders } from './playwright.ts';
 import { v4 as uuidv4 } from 'uuid';
 import modelSpecs from '../models.json' with { type: 'json' };
 import { withRetry } from '../utils/retry.ts';
-import { throttleAccount, pickAccount } from './auth.ts';
+import { throttleAccount, pickAccount, getAllAccountEmails } from './auth.ts';
 import { createNetworkEntry, recordResponse, recordStreamChunk, completeEntry, errorEntry } from './networkDebug.ts';
 
 export class RetryableQwenStreamError extends Error {
@@ -72,6 +72,8 @@ let cachedModels: any[] | null = null;
 let lastModelsFetch = 0;
 let nativeToolsDisabled = false;
 let disablingNativeToolsInProgress: Promise<void> | null = null;
+let personalizationDisabled = false;
+let disablingPersonalizationInProgress: Promise<void> | null = null;
 
 export async function disableNativeTools(): Promise<void> {
   if (nativeToolsDisabled) return;
@@ -138,6 +140,77 @@ export async function disableNativeTools(): Promise<void> {
   return disablingNativeToolsInProgress;
 }
 
+export async function disablePersonalization(): Promise<void> {
+  if (personalizationDisabled) return;
+  if (disablingPersonalizationInProgress) {
+    await disablingPersonalizationInProgress;
+    return;
+  }
+  disablingPersonalizationInProgress = (async () => {
+    const emails = getAllAccountEmails();
+    const accountsToProcess = emails.length > 0 ? emails : ['primary'];
+    for (const email of accountsToProcess) {
+      let settingsDebugId: string | null = null;
+      try {
+        const { headers } = await getQwenHeaders(false, email);
+        const payload = {
+          memory: {
+            enable_memory: false,
+            enable_history_memory: false,
+            memory_version_reminder: false,
+          },
+          mcp: {
+            'code-interpreter': false,
+            'fire-crawl': false,
+            'amap': false,
+            'image-generation': false,
+          },
+        };
+        console.log(`[Qwen] Disabling personalization for ${email}...`);
+        const settingsHeaders: Record<string, string> = {
+          'accept': 'application/json, text/plain, */*',
+          'accept-language': 'pt-BR,pt;q=0.9',
+          'content-type': 'application/json',
+          'cookie': headers['cookie'],
+          'origin': 'https://chat.qwen.ai',
+          'referer': 'https://chat.qwen.ai/',
+          'user-agent': headers['user-agent'],
+          'x-request-id': uuidv4(),
+          'bx-ua': headers['bx-ua'],
+          'bx-umidtoken': headers['bx-umidtoken'],
+          'bx-v': headers['bx-v'],
+        };
+        const settingsDebugEntry = createNetworkEntry({
+          url: 'https://chat.qwen.ai/api/v2/users/user/settings/update',
+          method: 'POST',
+          headers: settingsHeaders,
+          body: payload,
+          category: 'settings',
+        });
+        settingsDebugId = settingsDebugEntry.id;
+        const response = await fetch('https://chat.qwen.ai/api/v2/users/user/settings/update', {
+          method: 'POST',
+          headers: settingsHeaders,
+          body: JSON.stringify(payload),
+        });
+        recordResponse(settingsDebugId, response);
+        if (!response.ok) {
+          const text = await response.text();
+          console.error(`[Qwen] Failed to disable personalization for ${email}: ${response.status} - ${text}`);
+        } else {
+          console.log(`[Qwen] Personalization disabled for ${email}.`);
+        }
+        completeEntry(settingsDebugId);
+      } catch (err: any) {
+        if (settingsDebugId) errorEntry(settingsDebugId, err.message);
+        console.error(`[Qwen] Error disabling personalization for ${email}: ${err.message}`);
+      }
+    }
+    personalizationDisabled = true;
+  })();
+  return disablingPersonalizationInProgress;
+}
+
 export async function fetchQwenModels(): Promise<any[]> {
   const now = Date.now();
   if (cachedModels && (now - lastModelsFetch < 3600000)) {
@@ -179,45 +252,46 @@ export async function fetchQwenModels(): Promise<any[]> {
       }
 
       const json = await response.json();
-      if (json.data && Array.isArray(json.data)) {
-        const models = json.data.map((m: any) => {
-      const id = (m.id as string).toLowerCase().replace(/\./g, '-');
-      const specs = (modelSpecs as any)[id] || (modelSpecs as any)[id.replace(/-no-thinking$/, '')] || { max_context: 1000000, max_output: 65536, modalities: ['text'] };
-      return {
-        id: m.id,
-        object: 'model',
-        created: m.info?.created_at || Math.floor(Date.now() / 1000),
-        owned_by: m.owned_by || 'qwen',
-        context_window: specs.max_context,
-        max_output_tokens: specs.max_output,
-        modalities: specs.modalities,
-      };
-    });
+      if (!json.data || !Array.isArray(json.data)) {
+        console.warn(`[Qwen] fetchQwenModels: response missing data array, returning cached or empty`);
+        completeEntry(modelsDebugId);
+        return cachedModels || [];
+      }
 
-    // Add -no-thinking versions for models that support thinking
-    const extendedModels = [...models];
-    for (const m of models) {
-      extendedModels.push({
-        ...m,
-        id: `${m.id}-no-thinking`
+      const models = json.data.map((m: any) => {
+        const id = (m.id as string).toLowerCase().replace(/\./g, '-');
+        const specs = (modelSpecs as any)[id] || (modelSpecs as any)[id.replace(/-no-thinking$/, '')] || { max_context: 1000000, max_output: 65536, modalities: ['text'] };
+        return {
+          id: m.id,
+          object: 'model',
+          created: m.info?.created_at || Math.floor(Date.now() / 1000),
+          owned_by: m.owned_by || 'qwen',
+          context_window: specs.max_context,
+          max_output_tokens: specs.max_output,
+          modalities: specs.modalities,
+        };
       });
-    }
 
-    cachedModels = extendedModels;
-    lastModelsFetch = now;
-    completeEntry(modelsDebugId);
-    return extendedModels;
-  }
+      // Add -no-thinking versions for models that support thinking
+      const extendedModels = [...models];
+      for (const m of models) {
+        extendedModels.push({
+          ...m,
+          id: `${m.id}-no-thinking`
+        });
+      }
+
+      cachedModels = extendedModels;
+      lastModelsFetch = now;
       completeEntry(modelsDebugId);
-      return [];
+      return extendedModels;
     } catch (err: any) {
       if (modelsDebugId) errorEntry(modelsDebugId, err.message);
       lastErr = err;
     }
   }
   console.error(`[Qwen] fetchQwenModels failed after 3 attempts:`, lastErr?.message);
-      console.warn(`[Qwen] fetchQwenModels: response missing data array, returning cached or empty`);
-      return cachedModels || [];
+  return cachedModels || [];
 }
 
 export async function createQwenStream(

@@ -1,51 +1,52 @@
-import { initPlaywright, closePlaywright, activePage, BrowserType } from './services/playwright.ts';
+import { initPlaywright, closePlaywright, activePage } from './services/playwright.ts';
+import { saveCookies } from './services/auth.ts';
 import * as dotenv from 'dotenv';
 
 dotenv.config();
 
 async function main() {
-  const email = process.env.QWEN_EMAIL;
-  const password = process.env.QWEN_PASSWORD;
+  const positionalEmail = process.argv.find((a, i) => i > 1 && !a.startsWith('--') && a.includes('@'));
+  const flagEmail = process.argv.find(a => a.startsWith('--email='))?.split('=')[1];
+  const email = positionalEmail || flagEmail;
 
-  let browserType: BrowserType = 'chromium';
-  const browserArg = process.argv.find(arg => arg.startsWith('--browser='));
-  if (browserArg) {
-    browserType = browserArg.split('=')[1] as BrowserType;
-  } else if (process.env.BROWSER) {
-    browserType = process.env.BROWSER as BrowserType;
+  if (!email) {
+    console.error('Usage: npm run login user@example.com');
+    console.error('       npm run login -- --email=user@example.com');
+    process.exit(1);
   }
 
-  if (email && password) {
-    console.log(`[Login] Credentials found in .env. Attempting automated API login using ${browserType}...`);
-    await initPlaywright(true, browserType);
-    const cookies = await activePage?.context()?.cookies();
-    const hasAuthCookie = cookies?.some(c => c.name.toLowerCase().includes('token') || c.name.toLowerCase().includes('session'));
-    if (hasAuthCookie) {
-      console.log('[Login] Automated login successful! Session saved.');
-      await closePlaywright();
-      process.exit(0);
-    } else {
-      console.warn('[Login] Automated login failed. Falling back to manual login...');
-    }
-  }
-
-  console.log(`Opening ${browserType} to allow manual login...`);
-  await closePlaywright();
-  await initPlaywright(false, browserType);
-  if (activePage) {
-    await activePage.goto('https://chat.qwen.ai/auth', { waitUntil: 'domcontentloaded' });
-  } else {
+  console.log(`[Login] Logging in as ${email}`);
+  await initPlaywright(false);
+  if (!activePage) {
     console.error('Failed to get active page');
     process.exit(1);
   }
-  console.log('Browser opened. Please login to chat.qwen.ai.');
-  console.log('Once you are fully logged in and can see the chat interface, close the browser window or press Ctrl+C here.');
 
-  process.on('SIGINT', async () => {
-    console.log('Closing browser...');
-    await closePlaywright();
-    process.exit(0);
+  await activePage.goto('https://chat.qwen.ai/auth', { waitUntil: 'domcontentloaded' });
+  console.log('Browser opened. Please login to chat.qwen.ai.');
+  console.log('Once you see the chat interface, press ENTER here to save the session.');
+
+  await new Promise<void>(resolve => {
+    process.stdin.once('data', () => resolve());
   });
+
+  console.log('[Login] Extracting session data...');
+  const cookies = await activePage.context().cookies();
+  const tokenCookie = cookies.find(c => c.name === 'token');
+  const refreshCookie = cookies.find(c => c.name === 'refresh_token');
+
+  if (!tokenCookie?.value) {
+    console.error('No token cookie found. Login may have failed.');
+    console.log('Cookies found:', cookies.map(c => c.name).join(', '));
+    await closePlaywright();
+    process.exit(1);
+  }
+
+  await saveCookies(email, tokenCookie.value, refreshCookie?.value || null);
+  console.log(`[Login] Session saved for ${email}. You can now use this account.`);
+  console.log('To add another account, run again: npm run login other@example.com');
+  await closePlaywright();
+  process.exit(0);
 }
 
 main();
