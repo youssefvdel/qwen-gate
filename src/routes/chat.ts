@@ -89,13 +89,13 @@ async function parseRequestBody(c: Context) {
 
 async function setupSession(messages: any[], body: OpenAIRequest, availableTokens: number, toolCalling: boolean, logId: string) {
   // ── Image detection ──────────────────────────────────────────
-  // Scan messages for image_url parts — upload happens inside retry loop with account email
+  // Only scan the LAST message — previous turns already uploaded their images
   let hasImages = false;
   const imageUrls: string[] = [];
 
-  for (const msg of messages) {
-    if (!Array.isArray(msg.content)) continue;
-    for (const part of msg.content) {
+  const lastMsg = messages[messages.length - 1];
+  if (lastMsg && Array.isArray(lastMsg.content)) {
+    for (const part of lastMsg.content) {
       if (part?.type === 'image_url' && part?.image_url?.url) {
         hasImages = true;
         imageUrls.push(part.image_url.url);
@@ -103,11 +103,12 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
     }
   }
 
-  // Strip image_url parts from messages (keep only text parts)
-  // so buildQwenMessages doesn't serialize them as JSON text
+  // Strip image_url parts only from the last message
+  // (older messages shouldn't have them, but handle for safety)
   let cleanedMessages = messages;
   if (hasImages) {
-    cleanedMessages = messages.map((msg: any) => {
+    cleanedMessages = messages.map((msg: any, idx: number) => {
+      if (idx !== messages.length - 1) return msg; // only strip last message
       if (!Array.isArray(msg.content)) return msg;
       const textParts = msg.content.filter((c: any) => c.type !== 'image_url');
       return { ...msg, content: textParts.length > 0 ? textParts : [{ type: 'text', text: '[Image]' }] };
