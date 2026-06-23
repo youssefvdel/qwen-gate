@@ -56,11 +56,11 @@
   "dependencies": {
     "@hono/node-server": "^2.0.3",
     "cloakbrowser": "^0.4.2",
+    "cycletls": "^2.0.5",
     "dotenv": "^16.6.1",
     "hono": "^4.12.21",
     "playwright": "^1.60.0",
     "playwright-core": "^1.61.0",
-    "wreq-js": "^2.3.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {

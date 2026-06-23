@@ -170,8 +170,7 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
       throw lastError || new Error('All accounts are rate-limited. Please wait and try again later.');
     }
 
-    // Upload images with concurrency limit to avoid wreq-js tokio/Bun epoll conflicts
-    // (too many concurrent wreq-js sessions can corrupt the shared Rust tokio runtime)
+    // Upload images with concurrency limit to avoid overwhelming the cycletls Go subprocess
     let imageFiles: QwenFileAttachment[] = [];
     if (hasImages && accountEmail) {
       const MAX_CONCURRENT = 2;

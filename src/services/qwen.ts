@@ -354,7 +354,7 @@ export async function createQwenStream(
       makeRequestQwenLogFile = logQwenRequest(payload, url);
     }
 
-    // Browserless path: wreq-js for TLS/HTTP2 impersonation, cookie from account manager
+    // Browserless path: cycletls for TLS/HTTP2 impersonation, cookie from account manager
     const tokenInfo = currentAccountEmail ? await getTokenWithAccount(currentAccountEmail) : null;
     const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
 
@@ -382,7 +382,7 @@ export async function createQwenStream(
       },
       body: bodyStr,
       accountEmail: currentAccountEmail,
-      stream: true, // keep wreq-js session alive for streaming — closed when stream ends
+      stream: true, // request streaming response from cycletls
     });
     return { response, headers: {}, qwenLogFile: makeRequestQwenLogFile };
   };
@@ -403,25 +403,7 @@ export async function createQwenStream(
   if (!result.response.body) {
     throw new Error(`Qwen returned empty response body (status ${result.response.status})`);
   }
-  const streamDebugEntryId = lastDebugEntryId;
-  const textDecoder = new TextDecoder();
-  const wreqClose = (result.response as any)._wreqClose as (() => void) | undefined;
-  const wrappedStream = result.response.body.pipeThrough(
-    new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
-        if (streamDebugEntryId) {
-          recordStreamChunk(streamDebugEntryId, textDecoder.decode(chunk, { stream: true }));
-        }
-        controller.enqueue(chunk);
-      },
-      flush() {
-        if (streamDebugEntryId) {
-          completeEntry(streamDebugEntryId);
-        }
-        wreqClose?.(); // dispose wreq-js session when stream ends
-      },
-    }),
-  );
+  const wrappedStream = result.response.body; // already a ReadableStream from browserlessFetch
   return {
     stream: wrappedStream,
     headers: result.headers,
