@@ -7,6 +7,7 @@ export interface ConfigSchema {
   HOST: string;
   API_KEY: string;
   TOOL_CALLING: string;
+  TOOL_CALLING_MODE: string;
   CLEAN_OUTPUT: string;
   STREAMING_MODE: string;
   MAX_TOOL_CALLS_PER_RESPONSE: string;
@@ -35,6 +36,7 @@ export const DEFAULT_CONFIG: ConfigSchema = {
   HOST: '',
   API_KEY: '',
   TOOL_CALLING: 'true',
+  TOOL_CALLING_MODE: 'xml_prompt',
   CLEAN_OUTPUT: 'true',
   STREAMING_MODE: 'auto',
   MAX_TOOL_CALLS_PER_RESPONSE: '3',

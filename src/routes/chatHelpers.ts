@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import modelSpecs from '../models.json' with { type: 'json' };
 import { modelRouter } from '../services/modelRouter.ts';
 import { buildFeatureConfig, createQwenStream } from '../services/qwen.ts';
+import { config } from '../services/configService.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import type { ModelSpec } from '../types/openai.ts';
 import { THINK_TAG_NAMES, TOOL_CALL_KEYWORDS } from '../utils/tagNames.ts';
@@ -169,16 +170,62 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
   const featureConfig = buildFeatureConfig(true);
 
   if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
-    const localMcp: Record<string, any> = {};
-    localMcp['★'] = {};
-    for (const t of body.tools) {
-      const fn = t.function || {};
-      localMcp['★'][fn.name] = {
-        description: fn.description || '',
-        input_schema: fn.parameters || { type: 'object', properties: {} },
-      };
+    const mode = config.get('TOOL_CALLING_MODE', 'xml_prompt');
+
+    if (mode === 'local_mcp') {
+      // Original behaviour: inject via feature_config.local_mcp (native Qwen API).
+      // Broken on chat.qwen.ai as of mid-2026 — returns 500 Internal_Server_Error.
+      // Kept for users whose Qwen deployments still support this path.
+      const localMcp: Record<string, any> = {};
+      localMcp['★'] = {};
+      for (const t of body.tools) {
+        const fn = t.function || {};
+        localMcp['★'][fn.name] = {
+          description: fn.description || '',
+          input_schema: fn.parameters || { type: 'object', properties: {} },
+        };
+      }
+      featureConfig.local_mcp = localMcp;
+    } else {
+      // xml_prompt (default): inject tool DEFINITIONS using a DISTINCT tag
+      // (<tool name=..>) so they never collide with the <function=NAME>
+      // INVOCATION tag that xmlToolParser matches. The model is instructed to
+      // CALL tools with <function=NAME><parameter=K>V</parameter></function>,
+      // which the parser converts back to OpenAI tool_calls.
+      //
+      // Why distinct tags: past assistant tool_calls in multi-turn history are
+      // also serialized as <function=NAME>..</function> (see assistant branch
+      // above). If definitions ALSO used <function=NAME>, the prompt would
+      // contain three things sharing one tag — definitions, past calls, and the
+      // call-format instruction — and the model conflates them, hallucinating
+      // "Tool X does not exist". A separate <tool> tag removes the ambiguity.
+      const toolDefs = body.tools.map((t: any) => {
+        const fn = t.function || {};
+        const props = fn.parameters?.properties || {};
+        const required = fn.parameters?.required || [];
+        const argLines: string[] = [];
+        for (const [k, v] of Object.entries(props) as [string, any][]) {
+          const req = required.includes(k) ? ' (required)' : '';
+          argLines.push(`    <arg name="${escXml(k)}" type="${escXml(v.type || 'string')}">${escXml(v.description || '')}${req}</arg>`);
+        }
+        return `  <tool name="${escXml(fn.name)}">\n    <desc>${escXml(fn.description || '')}</desc>\n${argLines.join('\n')}\n  </tool>`;
+      }).join('\n');
+
+      const toolPrompt =
+        '\n\n## AVAILABLE TOOLS\n' +
+        'You can call these tools. Tool definitions (reference only — do NOT copy this format):\n' +
+        '<tools>\n' + toolDefs + '\n</tools>\n\n' +
+        'TO CALL A TOOL, emit EXACTLY this and nothing after the closing tag:\n' +
+        '<function=TOOL_NAME>\n<parameter=ARG_NAME>value</parameter>\n</function>\n\n' +
+        'Rules:\n' +
+        '- Use the tool name from the <tool name="..."> list as TOOL_NAME.\n' +
+        '- One <parameter=...> line per argument you pass.\n' +
+        '- After </function>, STOP immediately. Output no other text.\n' +
+        '- These tools ARE available in this environment. Call them — do not claim they are missing.';
+
+      // Prepend to prompt so model sees it inline, not as file attachment
+      prompt = toolPrompt + (prompt ? '\n' + prompt : '');
     }
-    featureConfig.local_mcp = localMcp;
   }
 
   // Single message (Qwen API only accepts 1 message per chat)
