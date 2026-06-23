@@ -8,7 +8,7 @@
 [![Bun](https://img.shields.io/badge/Bun-1.3+-pink.svg)](https://bun.sh/)
 [![GitHub Release](https://img.shields.io/github/v/release/youssefvdel/qwen-gate)](https://github.com/youssefvdel/qwen-gate/releases)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6.0-blue)](https://www.typescriptlang.org/)
-[![Playwright](https://img.shields.io/badge/Powered%20by-Playwright-blueviolet)](https://playwright.dev/)
+[![Browserless](https://img.shields.io/badge/Stack-Browserless-8B5CF6)](https://bun.sh)
 
 > **Disclaimer**: This project is for educational and study purposes. It provides access to Qwen models via `chat.qwen.ai` browser automation. Not affiliated with Alibaba Group or Qwen. Users must comply with `chat.qwen.ai`'s terms of service.
 
@@ -34,7 +34,8 @@ Then open [http://localhost:26405/dashboard](http://localhost:26405/dashboard) t
 - **Streaming SSE** — Server-Sent Events with heartbeat keep-alive and content filter integrity maintained across stream boundaries.
 - **Content Filter Pipeline** — Strips thinking tags and filters internal artifacts from model output.
 - **Web Dashboard** — Real-time monitoring with 5 pages: overview, request log, account manager, network debug, and settings.
-- **Stealth Browser Automation** — Uses CloakBrowser with anti-detection patches to maintain session integrity.
+- **Dual Transport** — Pure Node.js fetch via wreq-js for requests, Playwright browser automation for login/auth only. No browser needed for API calls.
+- **File Upload** — Large context payloads auto-uploaded as Qwen file attachments. Context above limit goes to `context.txt`, latest user message stays inline for low latency.
 - **No Build Step** — TypeScript executed directly via Bun. Run from source with no compilation needed.
 - **Bun-Powered** — Native TypeScript execution, built-in test runner, and cluster mode for multi-core utilization.
 
@@ -276,12 +277,21 @@ src/
 │       └── public/          Static dashboard assets (JS/CSS/SVG)
 ├── services/                Business logic
 │   ├── accountManager.ts    Account CRUD, round-robin rotation
+│   ├── auth.test.ts         Auth test suite
 │   ├── auth.ts              Auth orchestration
+│   ├── browserlessFetch.ts  Browserless fetch transport
 │   ├── browserProfiles.ts   Browser profile management
+│   ├── bxTokenExtractor.ts  Browserless token extraction
+│   ├── bxUaGenerator.test.ts User-agent generator tests
+│   ├── bxUaGenerator.ts     User-agent generation
+│   ├── configService.test.ts Config service tests
 │   ├── configService.ts     Config loader
 │   ├── defaultSystemPrompt.ts Default system prompt
+│   ├── fireyejsRunner.ts    FireyeJS sandbox runner
+│   ├── logStore.test.ts     Log store tests
 │   ├── logStore.ts          In-memory log store + SSE
 │   ├── loginHelpers.ts      Login helper utilities
+│   ├── loginService.ts      Login orchestration service
 │   ├── modelHealth.ts       Model health tracking
 │   ├── modelRouter.ts       Model routing & fallback
 │   ├── monitorStore.ts      Monitoring data store
@@ -293,6 +303,7 @@ src/
 │   ├── qwenModels.ts        Model fetching & mapping
 │   ├── sessionPool.ts       Session pool with autoscaling
 │   ├── systemLogger.ts      System-wide logger
+│   ├── tokenCache.ts        Token caching layer
 │   └── tokenRefresh.ts      Token refresh logic
 ├── tools/                   Tool calling system
 │   ├── registry.ts          Tool registry
@@ -323,7 +334,7 @@ src/
 bun test
 ```
 
-Uses Bun's built-in test runner. Covers content filtering, tool-call parsing, and streaming sanitization.
+Uses Bun's built-in test runner. Covers content filtering, tool-call parsing, streaming sanitization, bx-ua generation, and config service.
 
 ## Documentation
 

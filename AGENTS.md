@@ -28,7 +28,7 @@ src/
   routes/               API handlers + streaming logic
     dashboard/          Web dashboard (monitoring, accounts, logs, network, settings)
   tools/                Tool call system (parser, guard, schema, registry)
-  services/             Auth, accounts, sessions, Playwright, logStore, config
+  services/             Auth, accounts, sessions, Qwen API transport, logStore, config
   utils/                Shared utilities
   middleware/           Rate limiter
   types/                TypeScript interfaces

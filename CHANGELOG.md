@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-06-23
+
+### Fixed
+- **wreq-js Session Leak**: Explicitly close wreq-js sessions after every use to prevent tokio epoll `Bad file descriptor` crash. Sessions were created per-request (5-10 per request) but never disposed — the Rust tokio runtime continued polling on epoll fds after JS GC'd the wrapper objects. Now all sessions are closed on completion, error, and background timer paths.
+
+## [0.7.1] - 2026-06-23
+
+### Changed
+- **Per-Request wreq-js Sessions**: Switch to fresh wreq-js session per request to avoid tokio epoll/Bun event loop conflict (`Bad file descriptor` panic).
+- **Single File Upload**: Merged `system.txt` + `tool-result.txt` into one `context.txt` with `<system-instructions>` and `<tool-results>` sections. Cuts upload latency in half (4 network hops instead of 8).
+- **Parse Poll Timeout**: Reduced `pollParseStatus` max wait from 60s to 5s. Worst-case upload delay from 60s to 5s.
+- **Boot Account Config**: Apply system prompt + disable native tools at startup via `configureAccount()` call.
+
+### Fixed
+- **System Prompt Clarity**: Updated `defaultSystemPrompt.ts` — tool results are file-only, removed misleading "identical to instructions" claim.
+- **Dead Code**: Removed unused `applyRequestJitter` function from `qwen.ts`.
+
+## [0.7.0] - 2026-06-22
+
+### Changed
+- **Browserless Fetch Stack**: Replaced Playwright entirely with wreq-js based Qwen API interaction. No browser needed for requests.
+- **bx-ua Generator**: Pure Node.js UA generation replaces Playwright extraction.
+- **Test Mode Fetch**: `browserlessFetch` uses `globalThis.fetch` in test mode.
+- **Removed Playwright Dependency**: Removed from `getBasicHeaders()`, removed dead playwright import and `buildRequestHeaders` from `qwen.ts`.
+
+## [0.6.0] - 2026-06-19
+
+### Added
+- **Auto-Upload Large Payloads**: Large payloads auto-upload as Qwen file attachments. Latest user message stays inline, history goes to file.
+- **Dark Mode Toggle**: Added dark mode toggle in sidebar.
+- **Typed Config**: Password master key, health endpoint, rate limiting.
+
+### Changed
+- **Node.js Fetch for All API Calls**: Removed CDP routing. All API calls go through Node.js fetch.
+- **Headless Detection Evasion**: UA rotation and bot detection logging.
+- **Per-Account CDP Browser Contexts**: Startup order fixes, bot detection logging, account routing fixes.
+- **Upload Format**: XML tool result format, .txt file uploads, system prompt update.
+- **Dashboard**: Logs page removed from dashboard.
+- **Code Quality**: Biome format, bug fixes, dead code removal, docs audit.
+
+### Fixed
+- **Qwen CAPTCHA Detection**: Handles `FAIL_SYS_USER_VALIDATE` CAPTCHA responses.
+- **Browser Context Leak**: Orphan process prevention.
+- **Session Pool Hang**: Fixed `sessionPool.acquire()` from hanging indefinitely.
+
 ## [0.5.1] - 2026-06-16
 
 ### Changed
@@ -28,6 +73,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Dashboard Script Injection**: Fixed critical bug where `serveHtml` broke all `<script src="...">` tags when injecting `window.APP_VERSION`. ([#5](https://github.com/youssefvdel/qwen-gate/issues/5))
+
+## [0.4.0] - 2026-06-11
+
+### Added
+- **CDP Routing**: Route Qwen API through real Chrome via CDP to bypass baxia WAF.
+- **Profile-Based Auth**: Read tokens from Chromium browser profiles directly. Auto-detect system Chrome profiles.
+- **Parallel Extraction**: Parallel profile/cookie extraction at startup.
+
+### Changed
+- **Per-Account Browser Contexts**: Isolated CDP browser contexts per account.
+- **Two-Phase Body Storage**: Large CDP request body storage for 132KB+ payloads.
+- **Auth Rewrite**: Removed cookie folder system, refactored to Chromium profile auth.
+
+### Fixed
+- **Dashboard Script Injection**: Script injection breaking all dashboard pages (credit @eric).
+- **Refresh Token TTL**: Fixed refresh token TTL, saves refresh token + expiry.
+- **InFlight Counter Leak**: Fixed inFlight counter leak, deduplicated tool call logging.
+- **XML Leak Prevention**: Hardened XML leak prevention across all emission paths.
+- **Dashboard with API_KEY**: Fixed dashboard when `API_KEY` is set.
+
+## [0.3.1] - 2026-06-09
+
+### Changed
+- **Install Script Fixes**: Removed `set -e`, handle pipes, don't delete node_modules before install.
+- **XML Tool Call Parsing**: Improved XML tool call parsing.
+- **Per-Account Configuration**: Added per-account configuration support.
+- **Install Build Step**: Added build step to install process.
+
+## [0.3.0] - 2026-06-08
+
+### Changed
+- **Native XML Tool Calling**: Major refactor to Qwen native XML tool calling — `<function=name>` format replaces JSON tool calling.
+- **Single Role User**: Flattened messages to single `role:user` (Qwen limitation).
+- **Tool Result Format**: Tool results use `type:function` + `tool:name` format.
+- **Removed Echo Detection**: Removed echo detection, reworked XML stripping.
+
+### Added
+- **MCP Tool Call Extraction**: Extract MCP tool calls from SSE `extra.local_mcp`.
+- **Qwen API Request Logging**: Request logging to `logs/qwen/`.
+- **QwenBaseUrl Config**: Added `QwenBaseUrl` config support.
+- **Account Failover**: Account failover loop (community PR).
+
+### Fixed
+- **Cross-Platform Install Scripts**: Fixed install scripts for cross-platform reliability.
 
 ## [0.2.0] - 2026-06-04
 
@@ -95,7 +184,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Package.json with core dependencies
 - Basic README with project description
 
+[0.7.0]: https://github.com/youssefvdel/qwen-gate/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/youssefvdel/qwen-gate/compare/v0.5.1...v0.6.0
 [0.5.0]: https://github.com/youssefvdel/qwen-gate/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/youssefvdel/qwen-gate/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/youssefvdel/qwen-gate/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/youssefvdel/qwen-gate/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/youssefvdel/qwen-gate/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/youssefvdel/qwen-gate/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/youssefvdel/qwen-gate/releases/tag/v0.0.1

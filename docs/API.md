@@ -572,7 +572,7 @@ Tool results are intelligently compressed before being sent to the Qwen model. G
 
 ### Session Pooling
 
-Sessions are automatically managed per-account using CloakBrowser browser contexts. The pool rotates across accounts, auto-scales under load, and cleans up idle sessions. No API-level configuration required.
+Sessions are automatically managed per-account using browser session contexts. The pool rotates across accounts, auto-scales under load, and cleans up idle sessions. No API-level configuration required.
 
 ## Support
 

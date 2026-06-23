@@ -73,12 +73,21 @@ project-root/
 │   │       └── public/          Static assets (JS/CSS/SVG)
 │   ├── services/                Business logic
 │   │   ├── accountManager.ts    Account CRUD, round-robin
+│   │   ├── auth.test.ts         Auth tests
 │   │   ├── auth.ts              Auth orchestration
 │   │   ├── browserProfiles.ts   Browser profile management
+│   │   ├── browserlessFetch.ts  Browserless TLS/HTTP2 fetch
+│   │   ├── bxUaGenerator.test.ts bx-ua generator tests
+│   │   ├── bxUaGenerator.ts     bx-ua token generation
+│   │   ├── bxTokenExtractor.ts  bx-umidtoken extraction
+│   │   ├── configService.test.ts Config service tests
 │   │   ├── configService.ts     Config loader
 │   │   ├── defaultSystemPrompt.ts Default system prompt
+│   │   ├── fireyejsRunner.ts    Token generation infrastructure
+│   │   ├── logStore.test.ts     Log store tests
 │   │   ├── logStore.ts          In-memory log store + SSE
 │   │   ├── loginHelpers.ts      Login helpers
+│   │   ├── loginService.ts      Login orchestration
 │   │   ├── modelHealth.ts       Model health tracking
 │   │   ├── modelRouter.ts       Model routing & fallback
 │   │   ├── monitorStore.ts      Monitoring data store
@@ -90,6 +99,7 @@ project-root/
 │   │   ├── qwenModels.ts        Model fetching & mapping
 │   │   ├── sessionPool.ts       Session pool with autoscaling
 │   │   ├── systemLogger.ts      System-wide logger
+│   │   ├── tokenCache.ts        Token TTL cache
 │   │   └── tokenRefresh.ts      Token refresh logic
 │   ├── tests/                   Integration tests
 │   │   ├── helpers.ts           Test helpers
@@ -137,7 +147,7 @@ project-root/
 |-----------|---------|
 | `src/routes/` | HTTP route handlers. Each file exports Hono route definitions. |
 | `src/routes/dashboard/` | Dashboard pages and components (template strings, sidebar, routing hub). |
-| `src/services/` | Core business logic: auth, session pool, Playwright, config, logging. |
+| `src/services/` | Core business logic: auth, session pool, Qwen API transport, config, logging. |
 | `src/tools/` | Tool calling system: registry, parser, guard, schema validation. |
 | `src/utils/` | Shared utilities: retry, content filter, token estimator, XML stripping. |
 | `src/types/` | Central TypeScript type definitions. |
@@ -156,11 +166,10 @@ bun dev
 Uses `bun --watch src/index.tsx` to run TypeScript directly with hot reload. The server starts on `http://localhost:26405` (configurable via `PORT`).
 
 The dev command:
-1. Initializes Playwright (chromium by default)
-2. Loads accounts from persistent storage
-3. Pre-warms Qwen auth headers
-4. Starts the Hono HTTP server
-5. Opens the dashboard at `/dashboard`
+1. Loads accounts from persistent storage
+2. Bootstraps Qwen auth headers (via Playwright login if needed)
+3. Starts the Hono HTTP server
+4. Opens the dashboard at `/dashboard`
 
 ### Production Start
 
@@ -187,7 +196,7 @@ bun cluster                # Multi-core cluster mode
 | `PORT` | `26405` | Server port |
 | `HOST` | (empty) | Bind address |
 | `API_KEY` | (empty) | Bearer token for API auth |
-| `BROWSER` | `chromium` | Playwright browser engine |
+| `BROWSER` | `chromium` | Browser engine for login (not API calls) |
 | `STREAMING_MODE` | `auto` | Streaming behavior (`auto`, `true`, `false`) |
 | `SAVE_REQUEST_LOGS` | `false` | Persist request/response logs to disk |
 
@@ -446,7 +455,7 @@ Shared utilities live in `src/utils/`. They are stateless, pure functions or log
 
 ### Session Pool Management
 
-The session pool (`src/services/sessionPool.ts`) manages Playwright browser sessions across Qwen accounts.
+The session pool (`src/services/sessionPool.ts`) manages Qwen account sessions across Qwen accounts.
 
 **Key concepts**:
 

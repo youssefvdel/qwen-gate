@@ -50,7 +50,7 @@ src/
 ├── middleware/      # Rate limiter
 ├── routes/         # API handlers + streaming
 │   └── dashboard/  # Web dashboard
-├── services/       # Auth, accounts, sessions, Playwright, config
+├── services/       # Auth, accounts, sessions, Qwen API transport, config
 ├── tests/          # Integration tests
 ├── tools/          # Tool calling system
 ├── types/          # OpenAI-compatible types

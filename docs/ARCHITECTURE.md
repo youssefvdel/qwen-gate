@@ -65,10 +65,10 @@ Qwen Gate is an OpenAI-compatible API proxy that provides access to Qwen AI mode
 │  └────────────────┬─────────────────────────────────────┘  │
 │                   │                                        │
 │  ┌────────────────▼─────────────────────────────────────┐  │
-│  │        Browser Automation Layer (CloakBrowser)        │  │
-│  │  - Browser instance management                       │  │
-│  │  - Qwen chat interface interaction                   │  │
-│  │  - Response extraction                               │  │
+ │  │        Qwen API Transport Layer                       │  │
+ │  │  - Browserless Node.js fetch via wreq-js             │  │
+ │  │  - File upload handling                              │  │
+ │  │  - bx-ua header generation                           │  │
 │  └────────────────┬─────────────────────────────────────┘  │
 │                   │                                        │
 │  ┌────────────────▼─────────────────────────────────────┐  │
@@ -138,26 +138,26 @@ Manages browser sessions and Qwen account rotation.
 - `Session` - Individual browser session
 - `AccountManager` - Account state tracking
 
-### 3. Browser Automation Layer
+### 3. Qwen API Transport
 
-**Location**: `src/services/playwright.ts`
+**Location**: `src/services/` (browserlessFetch.ts, qwen.ts, playwright.ts)
 
-Handles CloakBrowser browser automation for Qwen interaction.
+Dual transport — Node.js fetch via wreq-js for API calls, Playwright only for login/auth/header bootstrap.
 
 **Responsibilities**:
 
-- Browser instance management
-- Qwen chat interface navigation
-- Message sending and response extraction
-- Session authentication
-- Error recovery
+- Pure Node.js HTTP requests to Qwen API via wreq-js session
+- wreq-js provides TLS fingerprinting for bot detection evasion
+- bx-ua generator creates realistic browser UA headers without Playwright
+- Playwright still used for login authentication and initial header extraction
+- File upload handling via qwenFileUpload.ts for large context
 
 **Key Functions**:
 
-- `initPlaywright()` - Start browser instance
-- `createAccountContext()` - Initialize account session context
-- `getQwenHeaders()` - Get authenticated request headers
-- `closePlaywright()` - Shut down and cleanup resources
+- `browserlessFetch()` - Make Qwen API calls via wreq-js
+- `getQwenHeaders()` - Auth headers (from Playwright bootstrap)
+- `fetchQwenModels()` - Model list
+- `closeAll()` - Cleanup sessions
 
 The routes layer handles request dispatch, streaming coordination, content cleanup, and dashboard serving. Route files live directly in `src/routes/` — there is no subdirectory per filter.
 
@@ -212,20 +212,19 @@ The dashboard consists of a routing hub (`dashboardRoutes.ts`), a monitoring pag
    - Check rate limits
    │
    ▼
-4. Browser Automation
-   - Navigate to Qwen chat
-   - Send user message
-   - Wait for response
-   │
-   ▼
+4. Qwen API Transport
+   - Send HTTP request via wreq-js session
+   - Handle file upload if context large
+   - Stream response chunks
+    │
+    ▼
 5. Response Extraction
    - Parse Qwen response
    - Extract text content
    - Detect tool calls
-   │
-   ▼
+    │
+    ▼
 6. Response Pipeline
-   - Echo detection (bidirectional containment)
    - Content filtering
    - Format to OpenAI schema
    │
@@ -282,11 +281,7 @@ The dashboard consists of a routing hub (`dashboardRoutes.ts`), a monitoring pag
    - Processes tool result
    - Generates final response
    │
-   ▼
-7. Echo Detection
-   - Checks if response echoes tool result
-   - Filters verbatim echoes
-   - Returns clean response
+    ▼
 ```
 
 ## Key Subsystems
@@ -395,7 +390,8 @@ Flush Path (full pipeline):
 | **Bun**        | Runtime              | 1.3+    |
 | **TypeScript** | Type safety          | 5.7+    |
 | **Hono**       | Web framework        | Latest  |
-| **CloakBrowser** | Browser automation (wraps Playwright) | Latest  |
+| **wreq-js** | Node.js HTTP with TLS fingerprinting | Latest  |
+| **Playwright** | Login/auth only (not for API) | Latest  |
 | **tsx**        | TypeScript execution | Latest  |
 
 ### Frontend
@@ -415,12 +411,12 @@ Flush Path (full pipeline):
 - Excellent TypeScript support
 - Built-in streaming support
 
-**CloakBrowser**:
+**wreq-js**:
 
-- Wraps Playwright with anti-detection and stealth patches
-- Reliable browser automation with evasion of bot detection
-- Multi-browser support via underlying Playwright engine
-- Active development
+- Lightweight Node.js HTTP client using Rust-native TLS via napi-rs
+- Provides TLS fingerprinting that mimics browser TLS handshakes
+- Per-request sessions to avoid tokio epoll/Bun event loop conflicts
+- Dramatically lower overhead than Playwright for API calls
 
 **TypeScript**:
 
@@ -431,24 +427,22 @@ Flush Path (full pipeline):
 
 ## Design Decisions
 
-### 1. Browser Automation vs. Direct API
+### 1. Dual Transport: Browserless API + Playwright Auth
 
-**Decision**: Use browser automation (CloakBrowser, which wraps Playwright) instead of direct Qwen API.
+**Decision**: Use pure Node.js HTTP via wreq-js for API requests. Playwright is used only for login/authentication.
 
 **Rationale**:
 
 - Qwen doesn't provide a public API
-- Web interface is the only access method
-- Browser automation provides full feature access
-- Can handle authentication and session management
-- CloakBrowser adds anti-detection patches over Playwright for reliable access
+- Earlier approach used full browser automation for everything, but wreq-js provides TLS fingerprinting that avoids bot detection while being much lighter
+- Browser is only needed for login cookies
 
 **Tradeoffs**:
 
-- Higher resource usage (browser instances)
-- More complex error handling
-- Slower than direct API would be
-- Requires browser maintenance
+- Lower resource usage than full browser automation
+- No browser overhead for requests
+- Still need Playwright for auth bootstrap
+- wreq-js sessions must be disposed carefully (tokio epoll fd management)
 
 ### 2. Multi-Account Rotation
 
