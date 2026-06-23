@@ -21,12 +21,32 @@ test('Health check returns degraded when Playwright not initialized', async () =
   assert.ok(typeof body.uptime === 'number');
 });
 
-test('Models endpoint returns raw Qwen model data', async () => {
+test('Models endpoint returns cleaned OpenAI-compatible model data', async () => {
   const originalFetch = globalThis.fetch;
   (globalThis as any).fetch = async (input: any) => {
     const url = typeof input === 'string' ? input : input.url;
     if (url.includes('/api/models')) {
-      return new Response(JSON.stringify({ data: [{ id: 'qwen3.6-plus', owned_by: 'qwen' }] }), { status: 200 });
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: 'qwen3.6-plus',
+              owned_by: 'qwen',
+              info: {
+                created_at: 1732711466,
+                meta: {
+                  max_context_length: 1000000,
+                  max_summary_generation_length: 65536,
+                  modality: ['text', 'image'],
+                  short_description: 'A test model',
+                  capabilities: { vision: true, thinking: true },
+                },
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      );
     }
     return originalFetch(input);
   };
@@ -40,7 +60,20 @@ test('Models endpoint returns raw Qwen model data', async () => {
     const body = await res.json();
     assert.strictEqual(body.object, 'list');
     assert.ok(Array.isArray(body.data));
-    assert.ok(body.data.some((m: any) => m.id === 'qwen3.6-plus'));
+
+    const model = body.data[0];
+    assert.strictEqual(model.id, 'qwen3.6-plus');
+    assert.strictEqual(model.object, 'model');
+    assert.strictEqual(model.created, 1732711466);
+    assert.strictEqual(model.owned_by, 'qwen');
+    assert.strictEqual(model.context_window, 1000000);
+    assert.strictEqual(model.max_output_tokens, 65536);
+    assert.deepStrictEqual(model.modalities, ['text', 'image']);
+    assert.strictEqual(model.description, 'A test model');
+    assert.deepStrictEqual(model.capabilities, { vision: true, thinking: true });
+    // should not carry raw Qwen-internal fields
+    assert.strictEqual(model.info, undefined);
+    assert.strictEqual(model.preset, undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }

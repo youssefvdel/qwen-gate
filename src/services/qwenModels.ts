@@ -197,9 +197,21 @@ export async function fetchQwenModels(): Promise<any[]> {
         return cachedModels || [];
       }
 
-      cachedModels = json.data;
+      const models = json.data.map((m: any) => ({
+        id: m.id,
+        object: 'model',
+        created: m.info?.created_at || Math.floor(Date.now() / 1000),
+        owned_by: m.owned_by || 'qwen',
+        context_window: m.info?.meta?.max_context_length ?? 1000000,
+        max_output_tokens: m.info?.meta?.max_summary_generation_length ?? 65536,
+        modalities: m.info?.meta?.modality ?? ['text'],
+        description: m.info?.meta?.short_description || m.info?.meta?.description || '',
+        capabilities: m.info?.meta?.capabilities || {},
+      }));
+
+      cachedModels = models;
       lastModelsFetch = now;
-      return json.data;
+      return models;
     } catch (err: any) {
       lastErr = err;
     }
