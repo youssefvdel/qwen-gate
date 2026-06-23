@@ -120,6 +120,39 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
     toolResultsContent,
   } = buildQwenMessages(cleanedMessages, body, availableTokens, toolCalling);
 
+  // ── Inline content truncation ─────────────────────────────────
+  // Keep the most recent ~50k characters inline; push older history
+  // into context.txt so the model can reference it when needed.
+  const MAX_INLINE_CHARS = 50000;
+  let inlineContent = processedMessages[0].content as string;
+  let chatHistoryContent = '';
+
+  if (typeof inlineContent === 'string' && inlineContent.length > MAX_INLINE_CHARS) {
+    // Split on message boundaries: \n\n followed by <user> or <assist>
+    const parts = inlineContent.split(/\n\n(?=<user>|<assist>)/);
+
+    // Walk backwards — keep as many recent segments as fit within limit
+    let keptLen = 0;
+    let splitIdx = parts.length;
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const addLen = parts[i].length + (keptLen > 0 ? 2 : 0);
+      if (keptLen + addLen <= MAX_INLINE_CHARS) {
+        keptLen += addLen;
+        splitIdx = i;
+      } else {
+        break;
+      }
+    }
+
+    // ponytail: simple character-based split at message boundaries.
+    // If models need more precise token-aware splitting, add later.
+    if (splitIdx > 0) {
+      chatHistoryContent = parts.slice(0, splitIdx).join('\n\n');
+      inlineContent = parts.slice(splitIdx).join('\n\n');
+      processedMessages[0] = { ...processedMessages[0], content: inlineContent };
+    }
+  }
+
   // File upload happens inside retry loop using the same account as the request
   // (accounts can't access files uploaded by other accounts — must share the account)
   let lastFailedEmail: string | undefined;
@@ -153,12 +186,13 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
       }
     }
 
-    // Upload a single context file containing system instructions + tool results
+    // Upload a single context file: system instructions + tool results + older chat history
     // Merging cuts upload overhead in half (one STS token, one OSS upload, one parse poll)
-    if (accountEmail && (systemContent || toolResultsContent)) {
+    if (accountEmail && (systemContent || toolResultsContent || chatHistoryContent)) {
       const parts: string[] = [];
       if (systemContent) parts.push(`<system-instructions>\n${systemContent}\n</system-instructions>`);
       if (toolResultsContent) parts.push(`<tool-results>\n${toolResultsContent}\n</tool-results>`);
+      if (chatHistoryContent) parts.push(`<chat_history>\n${chatHistoryContent}\n</chat_history>`);
       const combinedContent = parts.join('\n\n');
       try {
         const file = await uploadLargeTextAsFile(accountEmail, combinedContent, 'context.txt');

@@ -21,7 +21,7 @@ Your conversation uses tagged message blocks. Each message is wrapped in XML-lik
 
 Messages may include attached files. These are referenced inline and also appear as file objects in the message.
 
-- **\`context.txt\` file** — A single file combining system instructions and tool call results. It contains two tagged sections:
+- **\`context.txt\` file** — A single file combining system instructions, tool call results, and older conversation history. It contains tagged sections:
 
   \`\`\`
   <system-instructions>
@@ -31,6 +31,10 @@ Messages may include attached files. These are referenced inline and also appear
   <tool-results>
   ... results of your tool calls ...
   </tool-results>
+
+  <chat_history>
+  ... older conversation history (beyond the inline context window) ...
+  </chat_history>
   \`\`\`
 
 ### How to Use \`context.txt\`
@@ -42,6 +46,7 @@ Messages may include attached files. These are referenced inline and also appear
 2. The **latest entries** at the end correspond to the most recent tool calls. Always start from the bottom.
 3. Do not guess or assume what a tool returned — read the file.
 4. If there are multiple tool calls, all their results are appended sequentially in the order they were called.
+5. If the \`<chat_history>\` section exists, it contains older conversation turns that preceded the inline context. Read it if you need the full conversation history.
 
 When a file is attached, treat it as authoritative context for that turn.
 `.trim();
