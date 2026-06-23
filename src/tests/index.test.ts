@@ -290,7 +290,7 @@ test('API Key protection', async () => {
   }
 });
 
-test('Chat completions with image uploads attaches files and sets t2v chat_type', async () => {
+test('Chat completions with image uploads attaches files (t2t chat_type, vision class)', async () => {
   const originalFetch = globalThis.fetch;
   const originalAccounts = [...accounts];
 
@@ -410,15 +410,15 @@ test('Chat completions with image uploads attaches files and sets t2v chat_type'
     assert.ok(Array.isArray(msg.files), 'Message should have files array');
     assert.ok(msg.files.length > 0, 'Should have at least one file (image)');
 
-    // Chat type should be t2v for vision
-    assert.strictEqual(msg.chat_type, 't2v', 'Chat type should be t2v for images');
-    assert.strictEqual(msg.sub_chat_type, 't2v', 'Sub chat type should be t2v');
-    assert.strictEqual(msg.extra?.meta?.subChatType, 't2v', 'Extra subChatType should be t2v');
+    // Chat type should remain t2t (default) — Qwen web UI uses t2t even with images
+    assert.strictEqual(msg.chat_type, 't2t', 'Chat type should remain t2t for images');
+    assert.strictEqual(msg.sub_chat_type, 't2t', 'Sub chat type should remain t2t');
+    assert.strictEqual(msg.extra?.meta?.subChatType, 't2t', 'Extra subChatType should remain t2t');
 
     // Verify file attachment format
     const file = msg.files[0];
-    assert.strictEqual(file.type, 'file', 'File attachment type should be file');
-    assert.strictEqual(file.file_class, 'image', 'File class should be image');
+    assert.strictEqual(file.type, 'image', 'File attachment type should be image');
+    assert.strictEqual(file.file_class, 'vision', 'File class should be vision');
   } finally {
     globalThis.fetch = originalFetch;
     accounts.splice(0, accounts.length, ...originalAccounts);

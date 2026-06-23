@@ -30,7 +30,7 @@ interface StsTokenResponse {
  * The web UI sends this complex nested object in messages[].files[].
  */
 export interface QwenFileAttachment {
-  type: 'file';
+  type: string;
   file: {
     created_at: number;
     data: Record<string, unknown>;
@@ -42,7 +42,7 @@ export interface QwenFileAttachment {
       name: string;
       size: number;
       content_type: string;
-      parse_meta: { parse_status: string };
+      parse_meta?: { parse_status: string };
     };
     update_at: number;
     lastModified: number;
@@ -274,6 +274,7 @@ async function uploadFileContent(
   fileClass: string,
   showType: string,
   filetype: string = 'file',
+  attachmentType: string = 'file',
 ): Promise<QwenFileAttachment> {
   const fileSize = buffer.length;
 
@@ -291,15 +292,18 @@ async function uploadFileContent(
   const fileUrl = await uploadToOss(sts, buffer, contentType);
   logStore.log('debug', 'upload', `[FileUpload] Uploaded to OSS — url=${fileUrl.substring(0, 80)}...`);
 
-  // Step 3: Trigger parsing
-  await parseFile(email, sts.file_id);
-  logStore.log('debug', 'upload', `[FileUpload] Parse triggered for ${sts.file_id}`);
+  // Images don't need server-side parsing — Qwen processes them directly from OSS
+  if (attachmentType === 'file') {
+    // Step 3: Trigger parsing
+    await parseFile(email, sts.file_id);
+    logStore.log('debug', 'upload', `[FileUpload] Parse triggered for ${sts.file_id}`);
 
-  // Step 4: Poll until parsed
-  await pollParseStatus(email, sts.file_id);
-  logStore.log('debug', 'upload', `[FileUpload] Parse complete for ${sts.file_id}`);
+    // Step 4: Poll until parsed
+    await pollParseStatus(email, sts.file_id);
+    logStore.log('debug', 'upload', `[FileUpload] Parse complete for ${sts.file_id}`);
+  }
 
-  return buildQwenFileAttachment(sts, fileName, fileSize, contentType, fileClass, showType);
+  return buildQwenFileAttachment(sts, fileName, fileSize, contentType, fileClass, showType, attachmentType);
 }
 
 // --- Orchestrator: upload large text as a Qwen file attachment ---
@@ -315,13 +319,21 @@ function buildQwenFileAttachment(
   contentType: string,
   fileClass: string,
   showType: string,
+  attachmentType: string = 'file',
 ): QwenFileAttachment {
   // Extract user_id from file_path: "5309db52-.../370e7cdc-..._filename" → first segment
   const userId = sts.file_path.split('/')[0] || '';
   const now = Date.now();
 
+  const meta: QwenFileAttachment['file']['meta'] = {
+    name: fileName,
+    size: fileSize,
+    content_type: contentType,
+    ...(attachmentType === 'file' ? { parse_meta: { parse_status: 'success' as const } } : {}),
+  };
+
   return {
-    type: 'file',
+    type: attachmentType,
     file: {
       created_at: now,
       data: {},
@@ -329,12 +341,7 @@ function buildQwenFileAttachment(
       hash: null,
       id: sts.file_id,
       user_id: userId,
-      meta: {
-        name: fileName,
-        size: fileSize,
-        content_type: contentType,
-        parse_meta: { parse_status: 'success' },
-      },
+      meta,
       update_at: now,
       lastModified: now,
       name: fileName,
@@ -405,5 +412,5 @@ export async function uploadImageAsFile(email: string, imageUrl: string): Promis
     throw new Error(`Image too large: ${(buffer.length / 1024 / 1024).toFixed(1)}MB (max 10MB)`);
   }
 
-  return uploadFileContent(email, buffer, fileName, mimeType, 'image', 'image', 'image');
+  return uploadFileContent(email, buffer, fileName, mimeType, 'vision', 'image', 'image', 'image');
 }

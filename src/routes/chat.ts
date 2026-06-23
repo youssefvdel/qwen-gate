@@ -210,16 +210,6 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
       };
     }
 
-    // Switch to vision chat type when images are present
-    if (hasImages && imageFiles.length > 0) {
-      processedMessages[0] = {
-        ...processedMessages[0],
-        chat_type: 't2v',
-        sub_chat_type: 't2v',
-        extra: { meta: { subChatType: 't2v' } },
-      };
-    }
-
     let sessionResult;
     try {
       sessionResult = await acquireSessionWithCorrections(accountEmail, processedMessages);
