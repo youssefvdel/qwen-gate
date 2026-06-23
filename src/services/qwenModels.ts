@@ -169,6 +169,9 @@ export async function fetchQwenModels(): Promise<any[]> {
   const { email: resolvedEmail } = await getBasicHeaders();
   if (resolvedEmail) decrementInFlight(resolvedEmail);
 
+  const tokenInfo = resolvedEmail ? await getTokenWithAccount(resolvedEmail) : null;
+  const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+
   let lastErr: Error | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -181,6 +184,7 @@ export async function fetchQwenModels(): Promise<any[]> {
           source: 'web',
           origin: QWEN_API_BASE,
           referer: 'https://chat.qwen.ai/',
+          ...(cookieStr ? { cookie: cookieStr } : {}),
         },
         accountEmail: resolvedEmail,
       });
