@@ -1,5 +1,3 @@
-import modelSpecs from '../models.json' with { type: 'json' };
-import type { ModelSpec } from '../types/openai.ts';
 import { decrementInFlight, getAllAccountEmails, getTokenWithAccount } from './auth.ts';
 import { browserlessFetch } from './browserlessFetch.ts';
 import { config } from './configService.ts';
@@ -195,30 +193,9 @@ export async function fetchQwenModels(): Promise<any[]> {
         return cachedModels || [];
       }
 
-      const models = json.data.map((m: any) => {
-        const id = (m.id as string).toLowerCase().replace(/\./g, '-');
-        const typedSpecs = modelSpecs as Record<string, ModelSpec>;
-        const specs = typedSpecs[id] ||
-          typedSpecs[id.replace(/-no-thinking$/, '')] || { max_context: 1000000, max_output: 65536, modalities: ['text'] };
-        return {
-          id: m.id,
-          object: 'model',
-          created: m.info?.created_at || Math.floor(Date.now() / 1000),
-          owned_by: m.owned_by || 'qwen',
-          context_window: specs.max_context,
-          max_output_tokens: specs.max_output,
-          modalities: specs.modalities,
-        };
-      });
-
-      const extendedModels = [...models];
-      for (const m of models) {
-        extendedModels.push({ ...m, id: `${m.id}-no-thinking` });
-      }
-
-      cachedModels = extendedModels;
+      cachedModels = json.data;
       lastModelsFetch = now;
-      return extendedModels;
+      return json.data;
     } catch (err: any) {
       lastErr = err;
     }

@@ -21,7 +21,7 @@ test('Health check returns degraded when Playwright not initialized', async () =
   assert.ok(typeof body.uptime === 'number');
 });
 
-test('Models endpoint returns qwen3.6-plus and qwen3.6-plus-no-thinking', async () => {
+test('Models endpoint returns raw Qwen model data', async () => {
   const originalFetch = globalThis.fetch;
   (globalThis as any).fetch = async (input: any) => {
     const url = typeof input === 'string' ? input : input.url;
@@ -41,7 +41,6 @@ test('Models endpoint returns qwen3.6-plus and qwen3.6-plus-no-thinking', async 
     assert.strictEqual(body.object, 'list');
     assert.ok(Array.isArray(body.data));
     assert.ok(body.data.some((m: any) => m.id === 'qwen3.6-plus'));
-    assert.ok(body.data.some((m: any) => m.id === 'qwen3.6-plus-no-thinking'));
   } finally {
     globalThis.fetch = originalFetch;
   }
