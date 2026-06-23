@@ -260,13 +260,61 @@ async function pollParseStatus(email: string, fileId: string, maxWaitMs = 5_000)
   // Qwen will include the file content once parsing completes on its side.
 }
 
+// --- Shared internal: upload arbitrary file content ---
+
+/**
+ * Upload arbitrary content (buffer) as a file to Qwen's file system.
+ * Runs the full 4-step pipeline: STS token -> OSS upload -> parse trigger -> poll status.
+ */
+async function uploadFileContent(
+  email: string,
+  buffer: Buffer,
+  fileName: string,
+  contentType: string,
+  fileClass: string,
+  showType: string,
+): Promise<QwenFileAttachment> {
+  const fileSize = buffer.length;
+
+  logStore.log('debug', 'upload', `[FileUpload] Uploading ${fileSize} bytes as "${fileName}" (${contentType}) for ${email}`);
+
+  // Step 1: Get STS credentials
+  const sts = await getstsToken(email, fileName, fileSize);
+  logStore.log(
+    'debug',
+    'upload',
+    `[FileUpload] Got STS token — bucket=${sts.bucketname}, file_id=${sts.file_id}, file_url=${sts.file_url}, endpoint=${sts.endpoint}, file_path=${sts.file_path}`,
+  );
+
+  // Step 2: Upload to OSS
+  const fileUrl = await uploadToOss(sts, buffer, contentType);
+  logStore.log('debug', 'upload', `[FileUpload] Uploaded to OSS — url=${fileUrl.substring(0, 80)}...`);
+
+  // Step 3: Trigger parsing
+  await parseFile(email, sts.file_id);
+  logStore.log('debug', 'upload', `[FileUpload] Parse triggered for ${sts.file_id}`);
+
+  // Step 4: Poll until parsed
+  await pollParseStatus(email, sts.file_id);
+  logStore.log('debug', 'upload', `[FileUpload] Parse complete for ${sts.file_id}`);
+
+  return buildQwenFileAttachment(sts, fileName, fileSize, contentType, fileClass, showType);
+}
+
 // --- Orchestrator: upload large text as a Qwen file attachment ---
 
 /**
  * Build the exact file attachment object matching Qwen web UI format.
  * Extracts user_id from file_path (format: "<user_id>/<file_id>_<filename>").
  */
-function buildQwenFileAttachment(sts: StsTokenResponse, fileName: string, fileSize: number, contentType: string): QwenFileAttachment {
+function buildQwenFileAttachment(
+  sts: StsTokenResponse,
+  fileName: string,
+  fileSize: number,
+  contentType: string,
+  fileClass: string,
+  showType: string,
+): QwenFileAttachment {
   // Extract user_id from file_path: "5309db52-.../370e7cdc-..._filename" → first segment
   const userId = sts.file_path.split('/')[0] || '';
   const now = Date.now();
@@ -304,8 +352,8 @@ function buildQwenFileAttachment(sts: StsTokenResponse, fileName: string, fileSi
     error: '',
     itemId: crypto.randomUUID(),
     file_type: contentType,
-    showType: 'file',
-    file_class: 'document',
+    showType,
+    file_class: fileClass,
     uploadTaskId: crypto.randomUUID(),
   };
 }
@@ -313,30 +361,48 @@ function buildQwenFileAttachment(sts: StsTokenResponse, fileName: string, fileSi
 export async function uploadLargeTextAsFile(email: string, text: string, fileName: string): Promise<QwenFileAttachment> {
   const encoder = new TextEncoder();
   const content = encoder.encode(text);
-  const fileSize = content.length;
   const contentType = 'text/plain';
+  return uploadFileContent(email, Buffer.from(content), fileName, contentType, 'document', 'file');
+}
 
-  logStore.log('debug', 'upload', `[FileUpload] Uploading ${fileSize} bytes (${text.length} chars) as "${fileName}" for ${email}`);
+/**
+ * Download an image (data URI or remote URL) and upload it to Qwen's file system.
+ * Returns a QwenFileAttachment ready to attach to messages.
+ */
+export async function uploadImageAsFile(email: string, imageUrl: string): Promise<QwenFileAttachment> {
+  let buffer: Buffer;
+  let mimeType: string;
+  let fileName: string;
 
-  // Step 1: Get STS credentials
-  const sts = await getstsToken(email, fileName, fileSize);
-  logStore.log(
-    'debug',
-    'upload',
-    `[FileUpload] Got STS token — bucket=${sts.bucketname}, file_id=${sts.file_id}, file_url=${sts.file_url}, endpoint=${sts.endpoint}, file_path=${sts.file_path}`,
-  );
+  if (imageUrl.startsWith('data:')) {
+    // Data URI: data:image/png;base64,iVBOR...
+    const match = imageUrl.match(/^data:([^;]+);base64,(.+)$/);
+    if (!match) throw new Error('Invalid data URI format');
+    mimeType = match[1];
+    buffer = Buffer.from(match[2], 'base64');
+    fileName = `image.${mimeType.split('/')[1] || 'png'}`;
+  } else {
+    // Remote URL — fetch with timeout
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30_000);
+    try {
+      const response = await fetch(imageUrl, { signal: controller.signal });
+      if (!response.ok) throw new Error(`Failed to download image: ${response.status}`);
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.startsWith('image/')) throw new Error(`Not an image: ${contentType}`);
+      const arrayBuffer = await response.arrayBuffer();
+      buffer = Buffer.from(arrayBuffer);
+      mimeType = contentType;
+      fileName = `image.${mimeType.split('/')[1] || 'png'}`;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
 
-  // Step 2: Upload to OSS
-  const fileUrl = await uploadToOss(sts, Buffer.from(content), contentType);
-  logStore.log('debug', 'upload', `[FileUpload] Uploaded to OSS — url=${fileUrl.substring(0, 80)}...`);
+  // Reject images over 10MB
+  if (buffer.length > 10 * 1024 * 1024) {
+    throw new Error(`Image too large: ${(buffer.length / 1024 / 1024).toFixed(1)}MB (max 10MB)`);
+  }
 
-  // Step 3: Trigger parsing
-  await parseFile(email, sts.file_id);
-  logStore.log('debug', 'upload', `[FileUpload] Parse triggered for ${sts.file_id}`);
-
-  // Step 4: Poll until parsed
-  await pollParseStatus(email, sts.file_id);
-  logStore.log('debug', 'upload', `[FileUpload] Parse complete for ${sts.file_id}`);
-
-  return buildQwenFileAttachment(sts, fileName, fileSize, contentType);
+  return uploadFileContent(email, buffer, fileName, mimeType, 'image', 'image');
 }

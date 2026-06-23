@@ -6,6 +6,7 @@ process.env.TEST_MOCK_PLAYWRIGHT = 'true';
 process.env.API_KEY = 'test-key-for-testing';
 
 import { app } from '../index.tsx';
+import { accounts } from '../services/accountManager.ts';
 
 const TEST_API_KEY = 'test-key-for-testing';
 const authHeaders = { Authorization: `Bearer ${TEST_API_KEY}` };
@@ -254,6 +255,7 @@ test('Chat Completions returns a JSON chat.completion object for non-streaming r
 test('API Key protection', async () => {
   const originalApiKey = process.env.API_KEY;
   process.env.API_KEY = 'test-api-key';
+  let originalFetch: any;
 
   try {
     // 1. Test request without API Key
@@ -270,7 +272,7 @@ test('API Key protection', async () => {
 
     // 3. Test request with correct API Key
     // Mock fetch for models list
-    const originalFetch = globalThis.fetch;
+    originalFetch = globalThis.fetch;
     (globalThis as any).fetch = async () => new Response(JSON.stringify({ data: [] }), { status: 200 });
 
     try {
@@ -283,7 +285,143 @@ test('API Key protection', async () => {
       globalThis.fetch = originalFetch;
     }
   } finally {
+    globalThis.fetch = originalFetch;
     process.env.API_KEY = originalApiKey;
+  }
+});
+
+test('Chat completions with image uploads attaches files and sets t2v chat_type', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalAccounts = [...accounts];
+
+  // Seed a test account so pickAccount returns an account for image upload
+  accounts.push({
+    email: 'test@qwen-gate.dev',
+    password: 'test',
+    state: { token: 'mock-token', expiresAt: Date.now() + 3600000, refreshToken: null },
+    lastUsed: 0,
+    throttledUntil: 0,
+    refreshInFlight: null,
+    loginAttempt: 0,
+    inFlight: 0,
+    totalRequests: 0,
+    startupStatus: 'ready',
+  });
+
+  let stsCalled = false;
+  let ossCalled = false;
+  let chatPayload: any = null;
+
+  (globalThis as any).fetch = async (input: any, init?: any) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (url.includes('/api/models')) {
+      return new Response(JSON.stringify({ data: [{ id: 'qwen3.6-plus', owned_by: 'qwen' }] }), { status: 200 });
+    }
+    if (url.includes('/api/v2/files/getstsToken')) {
+      stsCalled = true;
+      return new Response(
+        JSON.stringify({
+          data: {
+            access_key_id: 'test-key',
+            access_key_secret: 'test-secret',
+            security_token: 'test-token',
+            bucketname: 'test-bucket',
+            region: 'oss-cn-hangzhou',
+            endpoint: 'oss-cn-hangzhou.aliyuncs.com',
+            file_id: 'test-file-id',
+            file_path: 'test-user/test-file-id_image.png',
+            file_url: 'https://test-bucket.oss-cn-hangzhou.aliyuncs.com/test-file-id_image.png',
+          },
+        }),
+        { status: 200 },
+      );
+    }
+    if (url.includes('/api/v2/files/parse/status')) {
+      return new Response(JSON.stringify({ data: [{ status: 'success' }] }), { status: 200 });
+    }
+    if (url.includes('/api/v2/files/parse')) {
+      return new Response(JSON.stringify({ success: true }), { status: 200 });
+    }
+    if (url.includes('aliyuncs.com') || url.includes('oss-')) {
+      ossCalled = true;
+      return new Response(null, { status: 200 });
+    }
+    if (url.includes('/api/v2/chat/completions')) {
+      // Capture the payload for later assertions
+      // init?.body is set when browserlessFetch calls globalThis.fetch(url, { method, headers, body })
+      const bodyStr =
+        typeof input === 'string' && init?.body ? init.body : typeof input !== 'string' ? await (input as Request).clone().text() : '';
+      try {
+        chatPayload = JSON.parse(bodyStr);
+      } catch {}
+      // Return a simple stream
+      const stream = new ReadableStream({
+        start(c) {
+          c.enqueue(new TextEncoder().encode('data: {"choices": [{"delta": {"content": "Image received"}}]}\n\n'));
+          c.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+          c.close();
+        },
+      });
+      return new Response(stream, { status: 200 });
+    }
+    return originalFetch(input, init);
+  };
+
+  try {
+    const payload = {
+      model: 'qwen3.6-plus',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'What is in this image?' },
+            { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAA=' } },
+          ],
+        },
+      ],
+      stream: false,
+    };
+
+    const req = new Request('http://localhost/v1/chat/completions', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, { Authorization: 'Bearer test-key-for-testing' }),
+      body: JSON.stringify(payload),
+    });
+
+    const res = await app.fetch(req);
+    assert.strictEqual(res.status, 200);
+
+    // Verify STS token was requested (image upload initiated)
+    assert.ok(stsCalled, 'Should have called getstsToken for image upload');
+
+    // Verify OSS upload happened
+    assert.ok(ossCalled, 'Should have uploaded image to OSS');
+
+    // Verify the chat payload has the right format
+    assert.ok(chatPayload, 'Chat completion should have been called');
+    const msg = chatPayload?.messages?.[0];
+    assert.ok(msg, 'Should have at least one message');
+
+    // The image_url should be stripped from content text (only text parts remain)
+    assert.ok(!msg.content.includes('image_url'), 'Image URL should be stripped from content text');
+    assert.ok(msg.content.includes('What is in this image?'), 'Text content should be preserved');
+
+    // Should have files attached
+    assert.ok(Array.isArray(msg.files), 'Message should have files array');
+    assert.ok(msg.files.length > 0, 'Should have at least one file (image)');
+
+    // Chat type should be t2v for vision
+    assert.strictEqual(msg.chat_type, 't2v', 'Chat type should be t2v for images');
+    assert.strictEqual(msg.sub_chat_type, 't2v', 'Sub chat type should be t2v');
+    assert.strictEqual(msg.extra?.meta?.subChatType, 't2v', 'Extra subChatType should be t2v');
+
+    // Verify file attachment format
+    const file = msg.files[0];
+    assert.strictEqual(file.type, 'file', 'File attachment type should be file');
+    assert.strictEqual(file.file_class, 'image', 'File class should be image');
+  } finally {
+    globalThis.fetch = originalFetch;
+    accounts.splice(0, accounts.length, ...originalAccounts);
   }
 });
 

@@ -6,7 +6,7 @@ import { logStore } from '../services/logStore.ts';
 import { modelRouter } from '../services/modelRouter.ts';
 import { RetryableQwenStreamError } from '../services/qwen.ts';
 import type { QwenFileAttachment } from '../services/qwenFileUpload.ts';
-import { uploadLargeTextAsFile } from '../services/qwenFileUpload.ts';
+import { uploadImageAsFile, uploadLargeTextAsFile } from '../services/qwenFileUpload.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import { cleanTextOfXmlArtifacts } from '../tools/xmlToolParser.ts';
 import { OpenAIRequest } from '../types/openai.ts';
@@ -88,11 +88,37 @@ async function parseRequestBody(c: Context) {
 }
 
 async function setupSession(messages: any[], body: OpenAIRequest, availableTokens: number, toolCalling: boolean, logId: string) {
+  // ── Image detection ──────────────────────────────────────────
+  // Scan messages for image_url parts — upload happens inside retry loop with account email
+  let hasImages = false;
+  const imageUrls: string[] = [];
+
+  for (const msg of messages) {
+    if (!Array.isArray(msg.content)) continue;
+    for (const part of msg.content) {
+      if (part?.type === 'image_url' && part?.image_url?.url) {
+        hasImages = true;
+        imageUrls.push(part.image_url.url);
+      }
+    }
+  }
+
+  // Strip image_url parts from messages (keep only text parts)
+  // so buildQwenMessages doesn't serialize them as JSON text
+  let cleanedMessages = messages;
+  if (hasImages) {
+    cleanedMessages = messages.map((msg: any) => {
+      if (!Array.isArray(msg.content)) return msg;
+      const textParts = msg.content.filter((c: any) => c.type !== 'image_url');
+      return { ...msg, content: textParts.length > 0 ? textParts : [{ type: 'text', text: '[Image]' }] };
+    });
+  }
+
   const {
     qwenMessages: processedMessages,
     systemContent,
     toolResultsContent,
-  } = buildQwenMessages(messages, body, availableTokens, toolCalling);
+  } = buildQwenMessages(cleanedMessages, body, availableTokens, toolCalling);
 
   // File upload happens inside retry loop using the same account as the request
   // (accounts can't access files uploaded by other accounts — must share the account)
@@ -110,6 +136,23 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
       throw lastError || new Error('All accounts are rate-limited. Please wait and try again later.');
     }
 
+    // Upload all images in parallel
+    let imageFiles: QwenFileAttachment[] = [];
+    if (hasImages && accountEmail) {
+      const results = await Promise.all(
+        imageUrls.map((url) =>
+          uploadImageAsFile(accountEmail, url).catch((err: any) => {
+            logStore.log('warn', 'chat', `[Chat] Image upload failed: ${err.message}`);
+            return null;
+          }),
+        ),
+      );
+      imageFiles = results.filter((f): f is QwenFileAttachment => f !== null);
+      if (imageFiles.length === 0) {
+        throw new Error('Failed to upload images — none of the image files could be uploaded');
+      }
+    }
+
     // Upload a single context file containing system instructions + tool results
     // Merging cuts upload overhead in half (one STS token, one OSS upload, one parse poll)
     if (accountEmail && (systemContent || toolResultsContent)) {
@@ -123,6 +166,24 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
       } catch (err: any) {
         logStore.log('debug', 'chat', '[Chat] Failed to upload context file: ' + (err.message || err));
       }
+    }
+
+    // Attach uploaded images to the first message
+    if (imageFiles.length > 0) {
+      processedMessages[0] = {
+        ...processedMessages[0],
+        files: [...(processedMessages[0].files || []), ...imageFiles],
+      };
+    }
+
+    // Switch to vision chat type when images are present
+    if (hasImages && imageFiles.length > 0) {
+      processedMessages[0] = {
+        ...processedMessages[0],
+        chat_type: 't2v',
+        sub_chat_type: 't2v',
+        extra: { meta: { subChatType: 't2v' } },
+      };
     }
 
     let sessionResult;
