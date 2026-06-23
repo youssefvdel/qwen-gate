@@ -69,12 +69,12 @@ export interface QwenFileAttachment {
 
 // --- Step 1: Get STS credentials for OSS upload ---
 
-async function getstsToken(email: string, filename: string, filesize: number): Promise<StsTokenResponse> {
+async function getstsToken(email: string, filename: string, filesize: number, filetype: string = 'file'): Promise<StsTokenResponse> {
   const url = `${QWEN_API_BASE}/api/v2/files/getstsToken`;
   const body = JSON.stringify({
     filename,
     filesize: String(filesize),
-    filetype: 'file',
+    filetype,
   });
 
   const tokenInfo = await getTokenWithAccount(email);
@@ -273,13 +273,14 @@ async function uploadFileContent(
   contentType: string,
   fileClass: string,
   showType: string,
+  filetype: string = 'file',
 ): Promise<QwenFileAttachment> {
   const fileSize = buffer.length;
 
   logStore.log('debug', 'upload', `[FileUpload] Uploading ${fileSize} bytes as "${fileName}" (${contentType}) for ${email}`);
 
   // Step 1: Get STS credentials
-  const sts = await getstsToken(email, fileName, fileSize);
+  const sts = await getstsToken(email, fileName, fileSize, filetype);
   logStore.log(
     'debug',
     'upload',
@@ -404,5 +405,5 @@ export async function uploadImageAsFile(email: string, imageUrl: string): Promis
     throw new Error(`Image too large: ${(buffer.length / 1024 / 1024).toFixed(1)}MB (max 10MB)`);
   }
 
-  return uploadFileContent(email, buffer, fileName, mimeType, 'image', 'image');
+  return uploadFileContent(email, buffer, fileName, mimeType, 'image', 'image', 'image');
 }
