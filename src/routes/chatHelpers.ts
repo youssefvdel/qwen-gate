@@ -224,7 +224,7 @@ export function handleImageModelFallback(body: any, messages: any[]): void {
     const supportsImages = specs?.modalities.includes('image');
     if (!supportsImages) {
       const original = body.model;
-      body.model = 'qwen3.6-plus' + (original.includes('-no-thinking') ? '-no-thinking' : '');
+      body.model = 'qwen3.7-plus' + (original.includes('-no-thinking') ? '-no-thinking' : '');
     }
   }
 }
