@@ -170,18 +170,18 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
       throw lastError || new Error('All accounts are rate-limited. Please wait and try again later.');
     }
 
-    // Upload all images in parallel
+    // Upload images sequentially to avoid wreq-js tokio/Bun epoll conflicts
+    // (parallel wreq-js sessions share a tokio runtime that interferes with Bun's event loop)
     let imageFiles: QwenFileAttachment[] = [];
     if (hasImages && accountEmail) {
-      const results = await Promise.all(
-        imageUrls.map((url) =>
-          uploadImageAsFile(accountEmail, url).catch((err: any) => {
-            logStore.log('warn', 'chat', `[Chat] Image upload failed: ${err.message}`);
-            return null;
-          }),
-        ),
-      );
-      imageFiles = results.filter((f): f is QwenFileAttachment => f !== null);
+      for (const url of imageUrls) {
+        try {
+          const file = await uploadImageAsFile(accountEmail, url);
+          if (file) imageFiles.push(file);
+        } catch (err: any) {
+          logStore.log('warn', 'chat', `[Chat] Image upload failed: ${err.message}`);
+        }
+      }
       if (imageFiles.length === 0) {
         throw new Error('Failed to upload images — none of the image files could be uploaded');
       }
