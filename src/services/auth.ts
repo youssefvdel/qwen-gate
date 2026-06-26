@@ -19,6 +19,7 @@ import {
   migrateFromOldPaths,
   rebuildEmailIndex,
   resetWatcherState,
+  saveAccountsToFile,
   setupAccountWatcher as setupAccountWatcherImpl,
 } from './accountManager.ts';
 import { config } from './configService.ts';
@@ -84,7 +85,7 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
   const discovered = discoverSavedAccounts();
 
   // Merge persisted accounts (which may include throttledUntil and profileCookies) with discovered accounts
-  const merged: Array<{ email: string; password: string; throttledUntil?: number; disabled?: boolean; profileCookies?: string }> = [
+  const merged: Array<{ email: string; password: string; throttledUntil?: number; disabled?: boolean; profileCookies?: string; token?: string; refreshToken?: string | null; expiresAt?: number }> = [
     ...discovered,
   ];
   for (const p of persisted) {
@@ -99,6 +100,12 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
       }
       if (p.disabled !== undefined) {
         existing.disabled = p.disabled;
+      }
+      if (p.profileCookies) existing.profileCookies = p.profileCookies;
+      if (p.token) {
+        existing.token = p.token;
+        existing.refreshToken = p.refreshToken;
+        existing.expiresAt = p.expiresAt;
       }
     } else if (p.password) {
       merged.push(p);
@@ -122,7 +129,10 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
     accounts.push({
       email: a.email,
       password: a.password,
-      state: null,
+      state:
+        a.token && a.expiresAt && a.expiresAt > Date.now()
+          ? { token: a.token, expiresAt: a.expiresAt, refreshToken: a.refreshToken ?? null }
+          : null,
       lastUsed: 0,
       throttledUntil: persistedUntil > Date.now() ? persistedUntil : 0,
       refreshInFlight: null,
@@ -145,6 +155,11 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
       const batch = accounts.slice(i, i + MAX_CONCURRENT_PROFILE_LOADS);
       const batchResults = await Promise.allSettled(
         batch.map(async (acct) => {
+          // Already hydrated from persisted token (still valid) — skip the expensive,
+          // lock-prone browser profile launch and the captcha-prone fresh login.
+          if (acct.state?.token && acct.state.expiresAt > Date.now()) {
+            return { acct, source: 'persisted' as const };
+          }
           const profileState = await loadCookiesFromProfile(acct.email);
           if (profileState) {
             acct.state = profileState;
@@ -169,7 +184,7 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
             const newState = await loginFresh(acct.email, acct.password);
             if (newState) {
               acct.state = newState;
-              await saveCookies(acct.email, newState.token, newState.refreshToken, newState.expiresAt);
+              await saveCookies(acct.email, newState.token, newState.refreshToken, newState.expiresAt, newState.profileCookies);
             }
           }),
         );
@@ -215,8 +230,14 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
     const acct = accounts.find((a) => a.email.toLowerCase().trim() === email.toLowerCase().trim());
     const password = acct?.password;
 
-    if (!existsSync(join(profileDir, 'Default', 'Cookies'))) {
-      logStore.log('warn', 'auth', `No profile dir for ${email} — creating via browser login...`);
+    // A profile directory is "real" if it was created by a prior browser launch
+    // (Local State + Default/ are the reliable markers). cloakbrowser may not
+    // materialize Default/Cookies until a session writes it, so checking only
+    // for Cookies caused real profiles to be treated as missing -> a 180s
+    // launchPersistentContext timeout storm on every cold boot.
+    const hasProfile = existsSync(profileDir) && existsSync(join(profileDir, 'Local State'));
+    if (!hasProfile) {
+      logStore.log('warn', `auth`, `No profile dir for ${email} — creating via browser login...`);
       if (password) {
         const { openBrowserProfile } = await import('./browserProfiles.ts');
         let result = await openBrowserProfile(email, password, { headless: true });
@@ -236,16 +257,47 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
 
     logStore.log('info', 'auth', `Loading token from profile for ${email}...`);
     const { BROWSER_DEFAULT_ARGS } = await import('./playwright.ts');
+    const { cleanupSingletonLock } = await import('./browserProfiles.ts');
     const { launchPersistentContext } = await import('cloakbrowser');
     const PROFILE_LAUNCH_TIMEOUT_MS = 30_000;
+    // Stale Chrome singleton files (common on Windows after a hard kill) make
+    // launchPersistentContext fail with EPERM -> null -> fresh login -> captcha.
+    cleanupSingletonLock(profileDir);
+    // Keep a handle on the launch promise so that if the timeout wins the race,
+    // the eventually-resolved context is still closed instead of leaking a live
+    // Chrome process. Leaked chromes pile up and exhaust resources, which makes
+    // every subsequent launch time out too -> profile-load (and baxia harvest)
+    // permanently breaks.
+    const launchPromise = launchPersistentContext({
+      userDataDir: profileDir,
+      headless: true,
+      args: [...BROWSER_DEFAULT_ARGS],
+    });
+    let launchTimedOut = false;
+    // Reaper: if the timeout wins the race we abandon `launchPromise`, but it
+    // will still resolve to a live Chrome later. Close it then, or it leaks.
+    // Piled-up orphan chromes exhaust resources and make every later launch
+    // time out too -> profile-load (and baxia harvest) permanently breaks.
+    launchPromise
+      .then((ctx: any) => {
+        if (launchTimedOut) {
+          try {
+            ctx?.close?.();
+          } catch {
+            /* best effort */
+          }
+        }
+      })
+      .catch(() => {
+        /* launch failed outright — nothing to reap */
+      });
     context = await Promise.race([
-      launchPersistentContext({
-        userDataDir: profileDir,
-        headless: true,
-        args: [...BROWSER_DEFAULT_ARGS],
-      }),
+      launchPromise,
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Profile launch timed out after 30s')), PROFILE_LAUNCH_TIMEOUT_MS),
+        setTimeout(() => {
+          launchTimedOut = true;
+          reject(new Error('Profile launch timed out after 30s'));
+        }, PROFILE_LAUNCH_TIMEOUT_MS),
       ),
     ]);
 
@@ -354,17 +406,24 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
   return null;
 }
 
-export async function saveCookies(email: string, token: string, refreshToken?: string | null, expiresAt?: number): Promise<void> {
+export async function saveCookies(
+  email: string,
+  token: string,
+  refreshToken?: string | null,
+  expiresAt?: number,
+  profileCookies?: string,
+): Promise<void> {
   const normalizedEmail = email.toLowerCase().trim();
   try {
-    let jwtExpiresAt = expiresAt;
-    if (!jwtExpiresAt) {
-      const payload = decodeJwt(token);
-      if (payload?.exp && typeof payload.exp === 'number') {
-        jwtExpiresAt = payload.exp * 1000;
-      } else {
-        jwtExpiresAt = Date.now() + getAuthTokenMaxAgeMs();
-      }
+    // Prefer the real JWT exp over any caller-supplied expiresAt. Login/refresh paths
+    // hardcode now+8h, which forces a captcha-prone re-login long before the token's real
+    // expiry. The JWT's own exp is authoritative whenever it is decodable.
+    let jwtExpiresAt: number;
+    const payload = decodeJwt(token);
+    if (payload?.exp && typeof payload.exp === 'number') {
+      jwtExpiresAt = payload.exp * 1000;
+    } else {
+      jwtExpiresAt = expiresAt ?? Date.now() + getAuthTokenMaxAgeMs();
     }
 
     const acct = accounts.find((a) => a.email.toLowerCase().trim() === normalizedEmail);
@@ -374,11 +433,18 @@ export async function saveCookies(email: string, token: string, refreshToken?: s
         expiresAt: jwtExpiresAt,
         refreshToken: refreshToken || acct.state?.refreshToken || null,
       };
+      // Persist baxia/WAF session cookies captured at login so chat requests
+      // can merge them with token= (steady-state WAF-warm). Only overwrite
+      // when the caller actually supplies a fresh set — never clobber existing
+      // cookies with undefined and drop a known-good WAF session.
+      if (profileCookies) acct.profileCookies = profileCookies;
       if (acct.throttledUntil > Date.now()) {
         acct.throttledUntil = 0;
       }
 
-      // Token lives in browser profile's Default/Cookies SQLite — no separate file needed
+      // Persist token state to accounts.json so a restart reuses a still-valid token
+      // instead of forcing a fresh (captcha-prone) login. profileCookies persist too.
+      saveAccountsToFile(accounts);
     }
   } catch (err: any) {
     logStore.log('error', 'auth', `Failed to save cookies for ${normalizedEmail}: ${err.message}`);

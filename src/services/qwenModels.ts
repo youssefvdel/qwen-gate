@@ -15,7 +15,7 @@ async function postQwenSettings(
 ): Promise<{ response: Response; debugId: string }> {
   const bodyStr = JSON.stringify(payload);
   const tokenInfo = email ? await getTokenWithAccount(email) : null;
-  const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+  const cookieStr = tokenInfo ? tokenInfo.cookie : '';
   const response = await browserlessFetch(QWEN_SETTINGS_URL, {
     method: 'POST',
     headers: {
@@ -129,7 +129,7 @@ export async function configureAccount(email: string, instruction?: string): Pro
 export async function deleteAllChats(email: string): Promise<void> {
   try {
     const tokenInfo = email ? await getTokenWithAccount(email) : null;
-    const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+    const cookieStr = tokenInfo ? tokenInfo.cookie : '';
     const response = await browserlessFetch(QWEN_CHATS_URL, {
       method: 'DELETE',
       headers: {
@@ -170,7 +170,7 @@ export async function fetchQwenModels(): Promise<any[]> {
   if (resolvedEmail) decrementInFlight(resolvedEmail);
 
   const tokenInfo = resolvedEmail ? await getTokenWithAccount(resolvedEmail) : null;
-  const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+  const cookieStr = tokenInfo ? tokenInfo.cookie : '';
 
   let lastErr: Error | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {

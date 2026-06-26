@@ -78,7 +78,7 @@ async function getstsToken(email: string, filename: string, filesize: number, fi
   });
 
   const tokenInfo = await getTokenWithAccount(email);
-  const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+  const cookieStr = tokenInfo ? tokenInfo.cookie : '';
   const response = await browserlessFetch(url, {
     method: 'POST',
     headers: {
@@ -189,7 +189,7 @@ async function parseFile(email: string, fileId: string): Promise<void> {
   const body = JSON.stringify({ file_id: fileId });
 
   const tokenInfo = await getTokenWithAccount(email);
-  const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+  const cookieStr = tokenInfo ? tokenInfo.cookie : '';
   const response = await browserlessFetch(url, {
     method: 'POST',
     headers: {
@@ -224,7 +224,7 @@ async function pollParseStatus(email: string, fileId: string, maxWaitMs = 5_000)
     const body = JSON.stringify({ file_id_list: [fileId] });
 
     const tokenInfo = await getTokenWithAccount(email);
-    const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+    const cookieStr = tokenInfo ? tokenInfo.cookie : '';
     const response = await browserlessFetch(url, {
       method: 'POST',
       headers: {

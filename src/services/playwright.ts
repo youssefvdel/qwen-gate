@@ -236,11 +236,12 @@ async function createContextInternal(email: string, cookies?: Record<string, str
   // Merge provided cookies with any saved profileCookies (full session with
   // baxia/WAF cookies: cna, ssxmod_itna, tfstk, isg, etc.)
   let allCookies = { ...cookies };
+  let acct: any;
   try {
     const { getAccountByEmail } = await import('./auth.ts');
-    const acct = email ? getAccountByEmail(email) : undefined;
+    acct = email ? getAccountByEmail(email) : undefined;
     if (acct?.profileCookies) {
-      acct.profileCookies.split(';').forEach((pair) => {
+      acct.profileCookies.split(';').forEach((pair: string) => {
         const eq = pair.indexOf('=');
         if (eq > 0) {
           const name = pair.slice(0, eq).trim();
@@ -253,6 +254,16 @@ async function createContextInternal(email: string, cookies?: Record<string, str
     logStore.log('debug', 'playwright', `profileCookies merge error: ${mergeErr.message}`);
   }
 
+  // Per-cookie expiry: the auth `token` cookie should live as long as the JWT
+  // it carries (acct.state.expiresAt) — a flat 1h expiry forced a re-challenge
+  // every hour even when the token was valid for hours. WAF/session cookies
+  // (cna, ssxmod_itna, tfstk, isg, ...) get a long expiry so the trusted WAF
+  // session persists. Fallback 8h when no account state.
+  const tokenExpiresSec = acct?.state?.expiresAt
+    ? Math.floor(acct.state.expiresAt / 1000)
+    : Math.floor(Date.now() / 1000) + 8 * 3600;
+  const wafExpiresSec = Math.floor(Date.now() / 1000) + 30 * 24 * 3600;
+
   const context = await defaultBrowser.newContext({
     storageState:
       allCookies && Object.keys(allCookies).length > 0
@@ -264,7 +275,7 @@ async function createContextInternal(email: string, cookies?: Record<string, str
                   value,
                   domain: '.qwen.ai',
                   path: '/',
-                  expires: Math.floor(Date.now() / 1000) + 3600,
+                  expires: name === 'token' ? tokenExpiresSec : wafExpiresSec,
                   httpOnly: true,
                   secure: true,
                   sameSite: 'Lax',

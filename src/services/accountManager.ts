@@ -70,7 +70,24 @@ interface PersistedAccountData {
   password: string;
   throttledUntil?: number;
   disabled?: boolean;
+  /** Full browser-profile cookie string (baxia/WAF: cna, ssxmod_itna, tfstk, isg, ...). Persisted so WAF cookies survive restart. */
+  profileCookies?: string;
+  /** Auth token state persisted so a restart reuses a still-valid token instead of forcing a captcha-prone fresh login. */
+  token?: string;
+  refreshToken?: string | null;
+  expiresAt?: number;
 }
+
+type LoadedAccount = {
+  email: string;
+  password: string;
+  throttledUntil?: number;
+  disabled?: boolean;
+  profileCookies?: string;
+  token?: string;
+  refreshToken?: string | null;
+  expiresAt?: number;
+};
 export function parseAccountsFromEnv(): Array<{ email: string; password: string }> {
   const result: Array<{ email: string; password: string }> = [];
   for (const [key, value] of Object.entries(process.env)) {
@@ -104,6 +121,20 @@ export function decodeJwt(token: string): Record<string, any> | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Resolve a token's real expiry (ms epoch) from its own JWT `exp` claim.
+ * Falls back to `fallbackMs` from now when the JWT is undecodable or has no exp.
+ * Use this everywhere a token enters RAM state so the live process honors the
+ * token's true lifetime instead of force-refreshing on a hardcoded 8h timer.
+ */
+export function tokenExpiresAt(token: string, fallbackMs: number): number {
+  const payload = decodeJwt(token);
+  if (payload?.exp && typeof payload.exp === 'number') {
+    return payload.exp * 1000;
+  }
+  return Date.now() + fallbackMs;
 }
 /* ── AES-256-GCM password encryption ── */
 const ALGORITHM = 'aes-256-gcm';
@@ -202,11 +233,15 @@ export function saveAccountsToFile(accounts: readonly AccountEntry[]): void {
       password: a.password, // plaintext
       ...(a.throttledUntil > Date.now() ? { throttledUntil: a.throttledUntil } : {}),
       ...(a.disabled !== undefined ? { disabled: a.disabled } : {}),
+      ...(a.profileCookies ? { profileCookies: a.profileCookies } : {}),
+      ...(a.state?.token
+        ? { token: a.state.token, refreshToken: a.state.refreshToken, expiresAt: a.state.expiresAt }
+        : {}),
     }));
   writeFileSync(ACCOUNTS_FILE, JSON.stringify(data, null, 2), 'utf-8');
 }
-export function loadAccountsFromFile(): Array<{ email: string; password: string; throttledUntil?: number; disabled?: boolean }> {
-  const tryLoad = (filePath: string): Array<{ email: string; password: string; throttledUntil?: number; disabled?: boolean }> | null => {
+export function loadAccountsFromFile(): Array<LoadedAccount> {
+  const tryLoad = (filePath: string): Array<LoadedAccount> | null => {
     try {
       if (!existsSync(filePath)) return null;
       const raw = readFileSync(filePath, 'utf-8');
@@ -218,6 +253,10 @@ export function loadAccountsFromFile(): Array<{ email: string; password: string;
           password: decryptPassword(d.password),
           throttledUntil: d.throttledUntil,
           disabled: d.disabled ?? false,
+          profileCookies: d.profileCookies,
+          token: d.token,
+          refreshToken: d.refreshToken,
+          expiresAt: d.expiresAt,
         }));
     } catch (err: any) {
       logStore.log('error', 'auth', `Failed to load ${filePath}: ${err.message}`);
@@ -416,7 +455,18 @@ export function resetWatcherState(): void {
   }
 }
 export function isAvailable(acct: AccountEntry): boolean {
-  if (acct.disabled) return false;
+  if (acct.disabled) {
+    // Auto-rearm a hard-disabled (3x login-fail) account once its recovery
+    // window passes, so a transient outage does not permanently shrink the pool.
+    if (acct.loginFailDisabledUntil && acct.loginFailDisabledUntil <= Date.now()) {
+      acct.disabled = false;
+      acct.loginAttempt = 0;
+      acct.loginFailDisabledUntil = undefined;
+      logStore.log('info', 'auth', `Auto-rearmed ${acct.email} after disable window — retry eligible`);
+    } else {
+      return false;
+    }
+  }
   if (!acct.state) return false;
   if (acct.throttledUntil > Date.now()) return false;
   return true;
@@ -514,6 +564,54 @@ export function isAccountThrottled(email: string): boolean {
   if (!acct) return true;
   return acct.throttledUntil > Date.now();
 }
+
+/** Max consecutive failed logins before an account is hard-disabled (configurable). */
+const MAX_LOGIN_ATTEMPTS = config.getInt('MAX_LOGIN_ATTEMPTS', 3);
+const LOGIN_FAIL_THROTTLE_MS = config.getInt('LOGIN_FAIL_THROTTLE_MS', 30 * 60 * 1000);
+/** How long a 3x-failed account stays hard-disabled before auto-rearming
+ *  (so a transient outage does not permanently kill the pool). */
+const LOGIN_FAIL_DISABLE_MS = config.getInt('LOGIN_FAIL_DISABLE_MS', 2 * 60 * 60 * 1000);
+
+/**
+ * Record a failed login: bump loginAttempt, throttle the account so the pool
+ * stops re-picking it (kills the signin storm), and hard-disable after MAX.
+ * The hard-disable is time-bounded (loginFailDisabledUntil) so a transient
+ * outage re-arms automatically instead of permanently shrinking the pool.
+ * Returns the updated attempt count.
+ */
+export function recordLoginFailure(email: string): number {
+  const acct = getAccountByEmail(email);
+  if (!acct) return 0;
+  acct.loginAttempt += 1;
+  acct.throttledUntil = Date.now() + LOGIN_FAIL_THROTTLE_MS;
+  if (acct.loginAttempt >= MAX_LOGIN_ATTEMPTS) {
+    acct.disabled = true;
+    acct.loginFailDisabledUntil = Date.now() + LOGIN_FAIL_DISABLE_MS;
+    logStore.log(
+      'error',
+      'auth',
+      `Disabling ${email} after ${acct.loginAttempt} failed logins (max ${MAX_LOGIN_ATTEMPTS}) — re-arms in ${Math.ceil(LOGIN_FAIL_DISABLE_MS / 3600000)}h`,
+    );
+  } else {
+    logStore.log(
+      'warn',
+      'auth',
+      `Login fail #${acct.loginAttempt}/${MAX_LOGIN_ATTEMPTS} for ${email} — throttled ${Math.ceil(LOGIN_FAIL_THROTTLE_MS / 60000)}min`,
+    );
+  }
+  saveAccountsToFile(accounts);
+  return acct.loginAttempt;
+}
+
+/** Reset the failed-login counter once a login succeeds. */
+export function resetLoginAttempts(email: string): void {
+  const acct = getAccountByEmail(email);
+  if (!acct) return;
+  if (acct.loginAttempt !== 0) {
+    acct.loginAttempt = 0;
+    saveAccountsToFile(accounts);
+  }
+}
 export function getAccountStats(): Array<{
   email: string;
   authenticated: boolean;
@@ -560,7 +658,7 @@ export async function getToken(): Promise<string | null> {
   }
   return null;
 }
-export async function getTokenWithAccount(email?: string): Promise<{ token: string; email: string } | null> {
+export async function getTokenWithAccount(email?: string): Promise<{ token: string; email: string; cookie: string } | null> {
   let acct: AccountEntry | null;
   let picked = false;
   if (email) {
@@ -578,5 +676,15 @@ export async function getTokenWithAccount(email?: string): Promise<{ token: stri
   }
   acct.lastUsed = Date.now();
   if (picked) decrementInFlight(acct.email);
-  return { token: acct.state.token, email: acct.email };
+  // Build the full request cookie: fresh JWT first, then the baxia/WAF profile cookies
+  // (cna, ssxmod_itna, tfstk, isg, ...) with any stale token= stripped to avoid duplicates.
+  // Sending only token= (the old behavior) makes every API request WAF-cold -> captcha.
+  const profile = acct.profileCookies
+    ? acct.profileCookies
+        .replace(/\btoken=[^;]+;?\s*/g, '')
+        .replace(/;+$/, '')
+        .trim()
+    : '';
+  const cookie = profile ? `token=${acct.state.token}; ${profile}` : `token=${acct.state.token}`;
+  return { token: acct.state.token, email: acct.email, cookie };
 }

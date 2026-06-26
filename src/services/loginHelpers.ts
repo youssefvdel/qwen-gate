@@ -7,6 +7,7 @@
 import crypto from 'crypto';
 import type { AuthState } from '../types/auth.ts';
 import { checkPlaywrightSession, getAuthTokenMaxAgeMs } from './auth.ts';
+import { tokenExpiresAt } from './accountManager.ts';
 import { logStore } from './logStore.ts';
 import { AccountContext, createAccountContext, getActivePage, getBrowser, Mutex, removeAccountContext } from './playwright.ts';
 import { createFetchTimeout, QWEN_BX_V } from './qwen.ts';
@@ -124,7 +125,7 @@ export async function loginFreshViaBrowser(email: string, hashedPassword: string
     if (finalToken) {
       return {
         token: finalToken,
-        expiresAt: Date.now() + getAuthTokenMaxAgeMs(),
+        expiresAt: tokenExpiresAt(finalToken, getAuthTokenMaxAgeMs()),
         refreshToken: finalRefresh,
       };
     }
@@ -176,24 +177,44 @@ export async function loginFreshViaFetch(email: string, hashedPassword: string):
       let token = data.data?.token || data.token || data.data?.session_token || null;
       let refreshToken = data.data?.refresh_token || data.refresh_token || null;
 
-      if (!token) {
-        const hdrs = response.headers as Headers & { getSetCookie?: () => string[] };
-        const setCookies: string[] =
-          typeof hdrs.getSetCookie === 'function' ? hdrs.getSetCookie() : (response.headers.get('set-cookie') || '').split(',');
+      // ALWAYS parse set-cookie headers — even when the JSON body has the token,
+      // the response also carries baxia/WAF session cookies (cna, ssxmod_itna,
+      // tfstk, isg) that must be persisted as profileCookies so chat requests
+      // are WAF-warm. Skipping this (the old `if (!token)` gate) left every
+      // fetch-login account WAF-cold on steady-state traffic -> mid-chat captcha.
+      const hdrs = response.headers as Headers & { getSetCookie?: () => string[] };
+      const setCookies: string[] =
+        typeof hdrs.getSetCookie === 'function' ? hdrs.getSetCookie() : (response.headers.get('set-cookie') || '').split(',');
 
-        for (const cookie of setCookies) {
-          const tokenMatch = cookie.match(/\btoken=([^;]+)/);
-          if (tokenMatch && !token) token = tokenMatch[1];
-          const refreshMatch = cookie.match(/\brefresh_token=([^;]+)/);
-          if (refreshMatch) refreshToken = refreshMatch[1];
+      const baxiaCookies: string[] = [];
+      for (const cookie of setCookies) {
+        const tokenMatch = cookie.match(/\btoken=([^;]+)/);
+        if (tokenMatch && !token) token = tokenMatch[1];
+        const refreshMatch = cookie.match(/\brefresh_token=([^;]+)/);
+        if (refreshMatch) refreshToken = refreshMatch[1];
+        // Capture the WAF session cookies by name (strip attributes after ;).
+        const nameMatch = cookie.match(/^\s*([a-zA-Z0-9_-]+)=([^;]+)/);
+        if (nameMatch) {
+          const name = nameMatch[1];
+          const value = nameMatch[2];
+          if (
+            value &&
+            name !== 'token' &&
+            name !== 'refresh_token' &&
+            /^(cna|ssxmod_itna|tfstk|isg|acw_tc|ssxmod_itna|xlly_s|baxia|mtop|csgo)/i.test(name)
+          ) {
+            baxiaCookies.push(`${name}=${value}`);
+          }
         }
       }
+      const profileCookies = baxiaCookies.length ? baxiaCookies.join('; ') : undefined;
 
       if (token) {
         return {
           token,
-          expiresAt: Date.now() + getAuthTokenMaxAgeMs(),
+          expiresAt: tokenExpiresAt(token, getAuthTokenMaxAgeMs()),
           refreshToken,
+          profileCookies,
         };
       }
 
@@ -315,7 +336,7 @@ export async function loginViaTempContext(
     if (capturedToken) {
       return {
         token: capturedToken,
-        expiresAt: Date.now() + getAuthTokenMaxAgeMs(),
+        expiresAt: tokenExpiresAt(capturedToken, getAuthTokenMaxAgeMs()),
         refreshToken: capturedRefresh,
       };
     }

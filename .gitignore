@@ -91,3 +91,4 @@ toolcall_study
 extract output qwen/
 research
 token-usage-output.txt
+.captcha-backup/

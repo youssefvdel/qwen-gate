@@ -27,7 +27,7 @@ export function getProfileDir(email: string): string {
 }
 
 /** Remove stale Chrome singleton files that block new instances from starting on this profile. */
-function cleanupSingletonLock(profileDir: string): void {
+export function cleanupSingletonLock(profileDir: string): void {
   for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
     try {
       const f = join(profileDir, name);
@@ -70,7 +70,10 @@ async function setupBrowserContext(email: string, headless: boolean): Promise<an
 async function checkExistingToken(context: any): Promise<boolean> {
   const existingCookies: Cookie[] = await context.cookies();
   const existingToken = existingCookies.find((c: Cookie) => c.name === 'token');
-  return !!(existingToken && existingToken.expires && existingToken.expires * 1000 > Date.now());
+  if (!existingToken) return false;
+  // expires <= 0 (e.g. -1) means a session cookie with no expiry -> treat as valid.
+  // Only reject cookies with a real expiry already in the past.
+  return existingToken.expires <= 0 || existingToken.expires * 1000 > Date.now();
 }
 
 async function fillLoginForm(page: any, email: string, password: string): Promise<void> {
@@ -121,6 +124,19 @@ async function detectCaptcha(page: any): Promise<boolean> {
   });
 }
 
+/** Build a `name=value; name=value` cookie string from a browser context's
+ *  cookies, capturing the baxia/WAF session cookies (cna, ssxmod_itna, tfstk,
+ *  isg, ...) alongside the token. These get persisted as profileCookies so
+ *  browserless chat requests can merge them with token= and stay WAF-warm
+ *  instead of going cold on every steady-state request. */
+function buildProfileCookies(cookies: Cookie[]): string | undefined {
+  const wafNames = /^(cna|ssxmod_itna|tfstk|isg|acw_tc|xlly_s|baxia|mtop|csgo)$/i;
+  const pairs = cookies
+    .filter((c) => c.value && (wafNames.test(c.name) || c.name === 'token' || c.name.toLowerCase().includes('refresh')))
+    .map((c) => `${c.name}=${c.value}`);
+  return pairs.length ? pairs.join('; ') : undefined;
+}
+
 async function tryCheckToken(context: any, email: string): Promise<LoginResult | null> {
   try {
     const cookies: Cookie[] = await context.cookies();
@@ -128,7 +144,7 @@ async function tryCheckToken(context: any, email: string): Promise<LoginResult |
     if (!tokenCookie) return null;
     const { saveCookies } = await import('./auth.ts');
     const refreshCookie = cookies.find((c: Cookie) => c.name.toLowerCase().includes('refresh'));
-    await saveCookies(email, tokenCookie.value, refreshCookie?.value);
+    await saveCookies(email, tokenCookie.value, refreshCookie?.value, undefined, buildProfileCookies(cookies));
     try {
       await context.close();
     } catch {
@@ -231,6 +247,9 @@ export async function refreshViaProfile(email: string): Promise<boolean> {
   let context: any = null;
 
   try {
+    // Stale Chrome singleton files block the launch -> null -> fall through to
+    // captcha-prone loginFresh. Clear them first (same as setupBrowserContext).
+    cleanupSingletonLock(profileDir);
     context = await cloakPersistentContext({
       userDataDir: profileDir,
       headless: true,
@@ -250,7 +269,7 @@ export async function refreshViaProfile(email: string): Promise<boolean> {
       if (tokenCookie && tokenCookie.expires && tokenCookie.expires * 1000 > Date.now()) {
         const { saveCookies } = await import('./auth.ts');
         const refreshCookie = cookies.find((c: Cookie) => c.name.toLowerCase().includes('refresh'));
-        await saveCookies(email, tokenCookie.value, refreshCookie?.value);
+        await saveCookies(email, tokenCookie.value, refreshCookie?.value, undefined, buildProfileCookies(cookies));
         try {
           await context.close();
         } catch {

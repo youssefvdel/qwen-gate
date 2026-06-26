@@ -8,6 +8,7 @@
  */
 
 import { availableParallelism, cpus } from 'node:os';
+import { config } from './services/configService.ts';
 import { logStore } from './services/logStore.ts';
 import { isBun } from './utils/env.ts';
 
@@ -17,7 +18,10 @@ if (!isBun) {
 }
 
 const numWorkers = availableParallelism?.() ?? cpus().length;
-logStore.log('debug', 'cluster', `\x1b[31m[cluster]\x1b[0m Starting ${numWorkers} workers...`);
+// Stagger worker boot so N workers don't all run initAuth (fresh signin) at the
+// same instant on the same IP -> Nx captcha. Worker N starts after N*STAGGER_MS.
+const WORKER_STAGGER_MS = config.getInt('CLUSTER_WORKER_STAGGER_MS', 2000);
+logStore.log('debug', 'cluster', `\x1b[31m[cluster]\x1b[0m Starting ${numWorkers} workers (staggered ${WORKER_STAGGER_MS}ms apart)...`);
 
 interface Worker {
   process: ReturnType<typeof Bun.spawn>;
@@ -46,9 +50,13 @@ function spawnWorker(id: number): Worker {
   return worker;
 }
 
-// Spawn all workers
+// Spawn all workers, staggered to avoid a boot-time signin storm
 for (let i = 0; i < numWorkers; i++) {
-  spawnWorker(i);
+  if (i === 0) {
+    spawnWorker(i);
+  } else {
+    setTimeout(() => spawnWorker(i), i * WORKER_STAGGER_MS);
+  }
 }
 
 // Monitor and restart dead workers every 5s
