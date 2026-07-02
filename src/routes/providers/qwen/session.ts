@@ -14,13 +14,13 @@ import { pickAccount, throttleAccount } from '../../../services/auth.ts';
 import { logStore } from '../../../services/logStore.ts';
 import { modelRouter } from '../../../services/modelRouter.ts';
 import { buildFeatureConfig, createQwenStream, RetryableQwenStreamError } from '../../../services/qwen.ts';
-import { sessionPool } from '../../../services/sessionPool.ts';
 import type { QwenFileAttachment } from '../../../services/qwenFileUpload.ts';
 import { uploadImageAsFile, uploadLargeTextAsFile } from '../../../services/qwenFileUpload.ts';
+import { sessionPool } from '../../../services/sessionPool.ts';
 import type { OpenAIRequest } from '../../../types/openai.ts';
+import { THINK_TAG_NAMES, TOOL_CALL_KEYWORDS } from '../../../utils/tagNames.ts';
 import { pendingCorrections } from '../../chatHelpersCore.ts';
 import { compressToolResult } from '../../compressToolResult.ts';
-import { THINK_TAG_NAMES, TOOL_CALL_KEYWORDS } from '../../../utils/tagNames.ts';
 
 // ── Types ─────────────────────────────────────────────────────────
 

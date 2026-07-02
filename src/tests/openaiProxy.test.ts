@@ -1,4 +1,4 @@
-import { test, expect, mock } from 'bun:test';
+import { expect, mock, test } from 'bun:test';
 import { createOpenAIProxyHandler } from '../routes/providers/openaiProxy.ts';
 
 function mockCtx() {

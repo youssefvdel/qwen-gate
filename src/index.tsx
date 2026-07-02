@@ -14,12 +14,12 @@ import { debugNetworkApp } from './routes/debugNetwork.ts';
 import { getAccountCount, getAccountStats, getAccounts, getAvailableCount, initAuth, setStartupStatus } from './services/auth.ts';
 import { config, updateClaudeCodeSettings } from './services/configService.ts';
 import { logStore } from './services/logStore.ts';
-import { configureAccount, fetchQwenModels } from './services/qwen.ts';
 import { fetchProviderModels } from './services/providerModelsService.ts';
-import { PROVIDER_MODELS } from './utils/providerModels.ts';
+import { configureAccount, fetchQwenModels } from './services/qwen.ts';
 import { safeCompare } from './utils/auth.ts';
 import { isBun } from './utils/env.ts';
 import { projectPath } from './utils/paths.ts';
+import { PROVIDER_MODELS } from './utils/providerModels.ts';
 
 process.title = 'opengate';
 

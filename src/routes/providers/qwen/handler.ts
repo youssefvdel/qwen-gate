@@ -13,9 +13,9 @@ import { logStore } from '../../../services/logStore.ts';
 import { cleanTextOfXmlArtifacts } from '../../../tools/xmlToolParser.ts';
 import type { OpenAIRequest } from '../../../types/openai.ts';
 import { registerProvider } from '../../providerRegistry.ts';
-import { setupSession } from './session.ts';
 import { handleNonStreamingRequest } from './pipeline-nonstream.ts';
 import { handleStreamingRequest } from './pipeline-stream.ts';
+import { setupSession } from './session.ts';
 
 // ── Provider handler ─────────────────────────────────────────────────────
 

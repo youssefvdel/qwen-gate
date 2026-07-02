@@ -12,10 +12,10 @@ import { sessionPool } from '../../services/sessionPool.ts';
 import { checkApiKeyAuth } from '../../utils/auth.ts';
 import { projectPath } from '../../utils/paths.ts';
 import { APP_VERSION } from '../../utils/version.ts';
-import { getProviderKeys, getProviderPageHtml, providersListHtml } from './providers.ts';
 import { monitorHtml } from './monitor.ts';
 import { networkHtml } from './network.ts';
 import { overviewHtml } from './overview.ts';
+import { getProviderKeys, getProviderPageHtml, providersListHtml } from './providers.ts';
 import { settingsHtml } from './settings.ts';
 
 const serveHtml = (html: string) => (c: any) => {

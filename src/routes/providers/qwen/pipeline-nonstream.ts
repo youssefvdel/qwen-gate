@@ -10,12 +10,12 @@ import { Context } from 'hono';
 import { logStore } from '../../../services/logStore.ts';
 import { sessionPool } from '../../../services/sessionPool.ts';
 import { detectParallelToolLoop } from '../../../tools/guard.ts';
+import { cleanTextOfXmlArtifacts, parseXmlToolCalls, xmlToolCallToParsed } from '../../../tools/xmlToolParser.ts';
 import type { Message, OpenAIRequest, ParsedToolCall } from '../../../types/openai.ts';
 import { filterContent } from '../../../utils/contentFilter.ts';
-import { commonPrefixLen, pendingCorrections, detectCumulativeChunk } from '../../chatHelpersCore.ts';
-import { parseQwenErrorPayload, processToolCallsThroughGuard, ToolSpamGuard } from './qwen-utils.ts';
-import { cleanTextOfXmlArtifacts, parseXmlToolCalls, xmlToolCallToParsed } from '../../../tools/xmlToolParser.ts';
+import { commonPrefixLen, detectCumulativeChunk, pendingCorrections } from '../../chatHelpersCore.ts';
 import { extractLocalMcpToolCalls } from './pipeline-stream.ts';
+import { parseQwenErrorPayload, processToolCallsThroughGuard, ToolSpamGuard } from './qwen-utils.ts';
 
 const MAX_TOOL_CALLS_PER_TURN = 8;
 

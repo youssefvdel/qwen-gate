@@ -49,7 +49,7 @@ self.onmessage = async (event: MessageEvent) => {
     // Write data at fixed offsets well past stack allocations
     const cBytes = enc.encode(challenge);
     const pBytes = enc.encode(prefix);
-    const dataOff = 131072;  // 128KB offset
+    const dataOff = 131072; // 128KB offset
     const prefOff = dataOff + cBytes.length + 32;
 
     new Uint8Array(memory.buffer, dataOff, cBytes.length).set(cBytes);

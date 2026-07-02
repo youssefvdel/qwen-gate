@@ -8,9 +8,9 @@
  */
 
 import { logStore } from '../../../services/logStore.ts';
-import { buildDeepSeekHeaders, createDeepSeekContext, DEEPSEEK_BASE_URL } from './spoofing.ts';
-import { solvePowInline } from './pow.ts';
 import { getHifLeim } from './leim.ts';
+import { solvePowInline } from './pow.ts';
+import { buildDeepSeekHeaders, createDeepSeekContext, DEEPSEEK_BASE_URL } from './spoofing.ts';
 
 export interface DeepSeekChatSession {
   id: string;

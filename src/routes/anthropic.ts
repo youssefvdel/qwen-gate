@@ -7,25 +7,25 @@ import { sessionPool } from '../services/sessionPool.ts';
 import { cleanTextOfXmlArtifacts, parseXmlToolCalls, xmlToolCallToParsed } from '../tools/xmlToolParser.ts';
 import type { OpenAIRequest, ParsedToolCall } from '../types/openai.ts';
 import { checkContextWindow, estimateTokens } from '../utils/tokenEstimator.ts';
-import { getModelSpecs, handleImageModelFallback } from './modelSpecs.ts';
-import { extractDeltaContent } from './providers/qwen/qwen-utils.ts';
-import type { NonStreamingContext } from './providers/qwen/pipeline-nonstream.ts';
-import { handleNonStreamingRequest } from './providers/qwen/pipeline-nonstream.ts';
-import { extractLocalMcpToolCalls } from './providers/qwen/pipeline-stream.ts';
-import { setupSession } from './providers/qwen/session.ts';
 import {
   AnthropicContentBlock,
   AnthropicMessage,
   anthropicMessagesToOpenAI,
   anthropicToolsToOpenAI,
-  mapModel,
-  formatContent,
   convertOpenAIResponseToAnthropic,
+  formatContent,
+  isValidToolCall,
+  mapModel,
+  mapParamName,
   normalizeToolName,
   REQUIRED_PARAMS,
-  mapParamName,
-  isValidToolCall,
 } from './anthropicFormat.ts';
+import { getModelSpecs, handleImageModelFallback } from './modelSpecs.ts';
+import type { NonStreamingContext } from './providers/qwen/pipeline-nonstream.ts';
+import { handleNonStreamingRequest } from './providers/qwen/pipeline-nonstream.ts';
+import { extractLocalMcpToolCalls } from './providers/qwen/pipeline-stream.ts';
+import { extractDeltaContent } from './providers/qwen/qwen-utils.ts';
+import { setupSession } from './providers/qwen/session.ts';
 
 // ── Anthropic SSE streaming ────────────────────────────────────────
 

@@ -4,8 +4,8 @@
  * Uses wreqFetch (Rust + BoringSSL) for TLS/HTTP2 fingerprint impersonation.
  */
 
-import { GLM_BASE_URL } from './spoofing.ts';
 import { logStore } from '../../../services/logStore.ts';
+import { GLM_BASE_URL } from './spoofing.ts';
 
 export interface GlmUser {
   id: string;

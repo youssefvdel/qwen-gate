@@ -9,10 +9,10 @@
  * The browser instance is reused across solves (launched once).
  */
 
-import { chromium, type Browser } from 'playwright-core';
 import { readFileSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { type Browser, chromium } from 'playwright-core';
 import { logStore } from '../../../services/logStore.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

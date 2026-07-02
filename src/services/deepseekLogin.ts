@@ -10,7 +10,7 @@
  */
 
 import type { ProviderAuthState } from '../types/auth.ts';
-import { autoLoginViaBrowser, type AutoLoginOutcome } from './browserProfiles.ts';
+import { type AutoLoginOutcome, autoLoginViaBrowser } from './browserProfiles.ts';
 import { manualBrowserLogin } from './loginHelpers.ts';
 import { logStore } from './logStore.ts';
 

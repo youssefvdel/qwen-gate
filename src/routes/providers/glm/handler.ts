@@ -7,10 +7,10 @@
  */
 
 import crypto from 'node:crypto';
-import { registerProvider } from '../../providerRegistry.ts';
 import type { Context } from 'hono';
-import type { OpenAIRequest } from '../../../types/openai.ts';
 import { logStore } from '../../../services/logStore.ts';
+import type { OpenAIRequest } from '../../../types/openai.ts';
+import { registerProvider } from '../../providerRegistry.ts';
 
 const MAX_RETRIES = 5;
 
