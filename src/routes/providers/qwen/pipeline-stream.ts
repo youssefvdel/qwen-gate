@@ -15,10 +15,11 @@ import { logStore } from '../../../services/logStore.ts';
 import { logQwenSSE } from '../../../services/qwenLogger.ts';
 import { sessionPool } from '../../../services/sessionPool.ts';
 import { cleanTextOfXmlArtifacts, parseXmlToolCalls, xmlToolCallToParsed } from '../../../tools/xmlToolParser.ts';
+import { detectParallelToolLoop } from '../../../tools/guard.ts';
 import type { Message, OpenAIRequest, ParsedToolCall } from '../../../types/openai.ts';
 import { filterContent } from '../../../utils/contentFilter.ts';
 import { THINK_TAG_NAMES, TOOL_CALL_KEYWORDS } from '../../../utils/tagNames.ts';
-import { detectCumulativeChunk } from '../../chatHelpersCore.ts';
+import { detectCumulativeChunk, pendingCorrections } from '../../chatHelpersCore.ts';
 import { buildChunkEvent, buildUsage, makeChoice, writeEvent, writeReasoningEvent, writeToolCallEvent } from '../../writeHelpers.ts';
 import {
   type AmplificationGuardState,
@@ -537,6 +538,29 @@ async function handlePostStreamCompletion(
 
     const finalToolCalls = streamState.lastFullContent ? parseXmlToolCalls(streamState.lastFullContent).toolCalls.length : 0;
     const effectiveToolCallCount = Math.max(emittedToolCallCount, finalToolCalls);
+
+    // ── Loop detection ────────────────────────────────────────────
+    const correctionPrompts: string[] = [];
+    if (effectiveToolCallCount >= 3) {
+      const allToolCalls = streamState.lastFullContent ? parseXmlToolCalls(streamState.lastFullContent).toolCalls : [];
+      const parsedForLoopCheck: ParsedToolCall[] = allToolCalls.map((tc: any, i: number) => ({
+        id: `call_stream_${i}`,
+        name: tc.name || 'unknown',
+        arguments: typeof tc.parameters === 'object' && tc.parameters !== null ? tc.parameters : {},
+      }));
+      const loopCheck = detectParallelToolLoop(parsedForLoopCheck);
+      if (!loopCheck.ok) {
+        correctionPrompts.push(loopCheck.correctionPrompt);
+        logStore.addError(logId, `Parallel loop: ${loopCheck.errors[0]}`);
+      }
+    }
+
+    // Persist correction prompts so they survive account rotation
+    if (correctionPrompts.length > 0) {
+      pendingCorrections.set(chatId, [...correctionPrompts]);
+      if (resolvedEmail) pendingCorrections.set(resolvedEmail, [...correctionPrompts]);
+      pendingCorrections.set('__echo_retry__', [...correctionPrompts]);
+    }
 
     if (streamState.lastFullContent && effectiveToolCallCount > emittedToolCallCount) {
       const parsed = parseXmlToolCalls(streamState.lastFullContent).toolCalls;
