@@ -319,6 +319,10 @@ function buildResponseFromState(state: StreamProcessorState, ctx: NonStreamingCo
 
   if (state.correctionPrompts.length > 0) {
     pendingCorrections.set(session.chatId, [...state.correctionPrompts]);
+    // Store by resolvedEmail so corrections survive account rotation across requests.
+    // The lookup in acquireSessionWithCorrections() checks chatId → accountEmail → __echo_retry__.
+    if (ctx.resolvedEmail) pendingCorrections.set(ctx.resolvedEmail, [...state.correctionPrompts]);
+    pendingCorrections.set('__echo_retry__', [...state.correctionPrompts]);
   }
 
   return c.json({

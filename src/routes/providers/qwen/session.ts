@@ -225,7 +225,15 @@ function buildQwenMessages(messages: any[], body: any, availableTokens: number, 
     result: { success: boolean; stdout?: string; stderr?: string; command?: string };
   }) =>
     `<tool_result tool="${r.tool}" success="${r.result.success}">\n<command>${escXml(r.result.command || '')}</command>\n<stdout>${escXml(r.result.stdout || '')}</stdout>\n<stderr>${escXml(r.result.stderr || '')}</stderr>\n</tool_result>`;
-  const toolResultsContent = toolResultObjects.length > 0 ? toolResultObjects.map(formatToolResult).join('\n\n') : undefined;
+  const toolResultsXml = toolResultObjects.length > 0 ? toolResultObjects.map(formatToolResult).join('\n\n') : undefined;
+
+  // Inline tool results directly in the prompt so the model sees them reliably
+  // regardless of file attachment reliability or account rotation.
+  // The file upload is kept as a backup mechanism for large context.
+  if (toolResultsXml) {
+    prompt += '\n\n### TOOL RESULTS\n\n' + toolResultsXml;
+  }
+
   const qwenMessages: QwenMessage[] = [
     {
       fid,
@@ -245,7 +253,7 @@ function buildQwenMessages(messages: any[], body: any, availableTokens: number, 
     },
   ];
 
-  return { qwenMessages, systemContent, toolResultsContent };
+  return { qwenMessages, systemContent, toolResultsContent: toolResultsXml };
 }
 
 // ── Session acquisition ────────────────────────────────────────────────
