@@ -45,6 +45,13 @@ const FALLBACK_CHAINS: Record<string, FallbackChain> = {
       { model: 'qwen3-6-plus', weight: 0.6, health_threshold: 0.8 },
     ],
   },
+  'qwen3-8-max-preview': {
+    primary: 'qwen3.8-max-preview',
+    fallbacks: [
+      { model: 'qwen3-7-max-preview', weight: 0.85, health_threshold: 0.9 },
+      { model: 'qwen3-6-plus', weight: 0.6, health_threshold: 0.8 },
+    ],
+  },
   'qwen3-7-max-preview': {
     primary: 'qwen3-7-max-preview',
     fallbacks: [{ model: 'qwen3-6-plus-preview', weight: 0.8, health_threshold: 0.9 }],
