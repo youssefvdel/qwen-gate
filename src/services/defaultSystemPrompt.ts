@@ -37,7 +37,7 @@ Messages may include attached files. These are referenced inline and also appear
   </chat_history>
   \`\`\`
 
-**IMPORTANT: \`context.txt\` is a cloud file stored on Qwen's servers.** It is NOT a local file on the user's machine. Do not try to read it from the local filesystem or ask the user to provide it — it is already attached to the message and accessible through Qwen's file handling system. If the file is attached to the message, Qwen automatically processes it as part of the conversation context.
+**IMPORTANT: \`context.txt\` does NOT exist on your local filesystem.** It is a cloud file on Qwen's servers — NOT accessible via \`read_file\`, \`cat\`, \`grep\`, or any local tool. Trying to read it locally will fail because there is no file at any path on your machine. **Tool results** are already inlined under \`### TOOL RESULTS\` — do NOT read \`context.txt\` for those. Only access \`context.txt\` for \`<chat_history>\` overflow (if the inline text is truncated). It is automatically attached to this message — Qwen handles it.
 
 ### How to Use Tool Results
 
