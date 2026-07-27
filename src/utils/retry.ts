@@ -206,6 +206,17 @@ function isRetryable(error: unknown, httpStatus?: number): boolean {
   // Explicit non-retryable
   if (error instanceof NonRetryableError) return false;
 
+  // Upstream rate-limit errors (e.g., QwenUpstreamError with upstreamStatus=429)
+  // should NOT be retried at the HTTP level — the account rotation loop in
+  // session.ts handles retrying with different accounts and model fallback.
+  // Retrying the same account is always wasted (Qwen throttles for hours).
+  if (error && typeof error === 'object' && 'upstreamStatus' in (error as object)) {
+    const upstreamErr = error as { upstreamStatus: number; upstreamCode?: string };
+    if (upstreamErr.upstreamStatus === 429) {
+      return false;
+    }
+  }
+
   // Network errors (fetch throws TypeError/DOMException for network issues)
   if (error instanceof TypeError || error instanceof DOMException) {
     const msg = String(error.message).toLowerCase();
