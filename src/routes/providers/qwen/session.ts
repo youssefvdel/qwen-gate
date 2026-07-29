@@ -189,20 +189,18 @@ function buildQwenMessages(messages: any[], body: any, availableTokens: number, 
     }
   }
 
-  let prompt = segments.length > 0 ? segments.join('\n\n') : '';
   const featureConfig = buildFeatureConfig(true);
 
+  // Add tool descriptions to system parts (before prompt inlining)
   if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
     const localMcp: Record<string, any> = {};
     localMcp['★'] = {};
-    const toolNames: string[] = [];
     for (const t of body.tools) {
       const fn = t.function || {};
       localMcp['★'][fn.name] = {
         description: fn.description || '',
         input_schema: fn.parameters || { type: 'object', properties: {} },
       };
-      toolNames.push(`${fn.name}${fn.description ? ` (${fn.description})` : ''}`);
     }
     featureConfig.local_mcp = localMcp;
     const toolDescriptions = body.tools
@@ -215,6 +213,12 @@ function buildQwenMessages(messages: any[], body: any, availableTokens: number, 
     systemParts.push(
       `You have access to the following tools:\n${toolDescriptions}\n\nTo call a tool, respond with the tool call in the appropriate format.`,
     );
+  }
+
+  // Build prompt with system instructions inlined (no file attachment needed)
+  let prompt = segments.length > 0 ? segments.join('\n\n') : '';
+  if (systemParts.length > 0) {
+    prompt = '### System Instructions\n\n' + systemParts.join('\n\n') + '\n\n' + prompt;
   }
 
   const fid = randomUUID();
@@ -428,7 +432,14 @@ export async function setupSession(
       }
     }
 
-    // ── Context file upload ──────────────────────────────────────
+    if (imageFiles.length > 0) {
+      processedMessages[0] = {
+        ...processedMessages[0],
+        files: [...(processedMessages[0].files || []), ...imageFiles],
+      };
+    }
+
+    // ── Context file upload (as native Qwen file attachment) ─────
     if (accountEmail && (systemContent || toolResultsContent || chatHistoryContent)) {
       const parts: string[] = [];
       if (systemContent) parts.push(`<system-instructions>\n${systemContent}\n</system-instructions>`);
@@ -436,17 +447,13 @@ export async function setupSession(
       if (chatHistoryContent) parts.push(`<chat_history>\n${chatHistoryContent}\n</chat_history>`);
       try {
         const file = await uploadLargeTextAsFile(accountEmail, parts.join('\n\n'), 'context.txt');
-        processedMessages[0] = { ...processedMessages[0], files: [file] };
+        processedMessages[0] = {
+          ...processedMessages[0],
+          files: [...(processedMessages[0].files || []), file],
+        };
       } catch (err: any) {
         logStore.log('debug', 'chat', `[${label}] Failed to upload context file: ` + (err.message || err));
       }
-    }
-
-    if (imageFiles.length > 0) {
-      processedMessages[0] = {
-        ...processedMessages[0],
-        files: [...(processedMessages[0].files || []), ...imageFiles],
-      };
     }
 
     // ── Session acquire ──────────────────────────────────────────

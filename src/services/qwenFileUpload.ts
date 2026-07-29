@@ -215,7 +215,7 @@ interface ParseStatusResponse {
   status: 'running' | 'success' | 'failed';
 }
 
-async function pollParseStatus(email: string, fileId: string, maxWaitMs = 5_000): Promise<void> {
+async function pollParseStatus(email: string, fileId: string, maxWaitMs = 15_000): Promise<void> {
   const url = `${QWEN_API_BASE}/api/v2/files/parse/status`;
   const startTime = Date.now();
   const pollInterval = 1_000;
