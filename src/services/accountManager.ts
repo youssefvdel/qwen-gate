@@ -464,7 +464,13 @@ export async function pickAccount(excludeEmail?: string): Promise<AccountEntry |
       `[Account] Picked ${picked.email} — inFlight=${picked.inFlight} totalReqs=${picked.totalRequests} lastUsed=${picked.lastUsed ? Date.now() - picked.lastUsed + 'ms ago' : 'never'}${excludeEmail ? ` (excluded: ${excludeEmail})` : ''}`,
     );
     picked.lastUsed = Date.now();
+    // Reset stuck inFlight: if counter > 0 and last increment was > 60s ago, it leaked
+    if (picked.inFlight > 0 && picked.lastInFlightAt && Date.now() - picked.lastInFlightAt > 60_000) {
+      logStore.log('warn', 'auth', `[Account] Reset stuck inFlight for ${picked.email} (was ${picked.inFlight}, stuck for ${Math.round((Date.now() - picked.lastInFlightAt) / 1000)}s)`);
+      picked.inFlight = 0;
+    }
     picked.inFlight++;
+    picked.lastInFlightAt = Date.now();
     // Safety valve: reset if counter drifts unreasonably high
     if (picked.inFlight > 20) picked.inFlight = 0;
     return picked;
