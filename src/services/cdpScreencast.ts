@@ -370,6 +370,37 @@ async function cdpSend(session: ScreencastSession, method: string, params?: any)
   });
 }
 
+function getVirtualKeyCode(key: string, code: string): number {
+  // Map common keys to their virtual key codes (Windows ABI)
+  const map: Record<string, number> = {
+    Backspace: 8, Tab: 9, Enter: 13, Shift: 16, Control: 17, Alt: 18,
+    CapsLock: 20, Escape: 27, ' ': 32, PageUp: 33, PageDown: 34,
+    End: 35, Home: 36, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40,
+    Insert: 45, Delete: 46,
+    '0': 48, '1': 49, '2': 50, '3': 51, '4': 52, '5': 53,
+    '6': 54, '7': 55, '8': 56, '9': 57,
+    a: 65, b: 66, c: 67, d: 68, e: 69, f: 70, g: 71, h: 72, i: 73,
+    j: 74, k: 75, l: 76, m: 77, n: 78, o: 79, p: 80, q: 81, r: 82,
+    s: 83, t: 84, u: 85, v: 86, w: 87, x: 88, y: 89, z: 90,
+    Meta: 91, F1: 112, F2: 113, F3: 114, F4: 115, F5: 116, F6: 117,
+    F7: 118, F8: 119, F9: 120, F10: 121, F11: 122, F12: 123,
+    NumLock: 144, ScrollLock: 145, ';': 186, '=': 187, ',': 188,
+    '-': 189, '.': 190, '/': 191, '`': 192, '[': 219, '\\': 220,
+    ']': 221, "'": 222,
+  };
+  if (map[key] != null) return map[key];
+  // Fallback: try code string
+  const codeMap: Record<string, number> = {
+    Digit0: 48, Digit1: 49, Digit2: 50, Digit3: 51, Digit4: 52,
+    Digit5: 53, Digit6: 54, Digit7: 55, Digit8: 56, Digit9: 57,
+    Numpad0: 96, Numpad1: 97, Numpad2: 98, Numpad3: 99, Numpad4: 100,
+    Numpad5: 101, Numpad6: 102, Numpad7: 103, Numpad8: 104, Numpad9: 105,
+    NumpadAdd: 107, NumpadSubtract: 109, NumpadMultiply: 106, NumpadDivide: 111,
+    NumpadDecimal: 110, NumpadEnter: 13,
+  };
+  return codeMap[code] || 0;
+}
+
 export function handleInputEvent(
   email: string,
   event: { type: string; x: number; y: number; button?: number; key?: string; code?: string; text?: string },
@@ -414,14 +445,36 @@ export function handleInputEvent(
         button: event.button === 2 ? 'right' : 'left', clickCount: 1,
       });
       break;
-    case 'keydown':
-      send('Input.dispatchKeyEvent', { type: 'keyDown', key: event.key, code: event.code, text: event.text || '' });
+    case 'keydown': {
+      const vk = getVirtualKeyCode(event.key || '', event.code || '');
+      send('Input.dispatchKeyEvent', {
+        type: 'keyDown',
+        key: event.key || '',
+        code: event.code || '',
+        windowsVirtualKeyCode: vk,
+        nativeVirtualKeyCode: vk,
+        text: event.text || '',
+        unmodifiedText: event.text || '',
+      });
       break;
-    case 'keyup':
-      send('Input.dispatchKeyEvent', { type: 'keyUp', key: event.key, code: event.code });
+    }
+    case 'keyup': {
+      const vk = getVirtualKeyCode(event.key || '', event.code || '');
+      send('Input.dispatchKeyEvent', {
+        type: 'keyUp',
+        key: event.key || '',
+        code: event.code || '',
+        windowsVirtualKeyCode: vk,
+        nativeVirtualKeyCode: vk,
+      });
       break;
+    }
     case 'keypress':
-      send('Input.dispatchKeyEvent', { type: 'char', text: event.text || '' });
+      send('Input.dispatchKeyEvent', {
+        type: 'char',
+        text: event.text || '',
+        unmodifiedText: event.text || '',
+      });
       break;
     case 'scroll':
       send('Input.dispatchMouseEvent', {
