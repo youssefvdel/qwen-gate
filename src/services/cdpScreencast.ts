@@ -479,7 +479,7 @@ export function handleInputEvent(
     case 'scroll':
       send('Input.dispatchMouseEvent', {
         type: 'mouseWheel', x: event.x, y: event.y,
-        deltaX: 0, deltaY: event.y > 0 ? -100 : 100,
+        deltaX: 0, deltaY: (event as any).deltaY > 0 ? 100 : -100,
       });
       break;
   }

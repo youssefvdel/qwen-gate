@@ -345,6 +345,8 @@ function openBrowserView(email, password) {
 }
 
 function setupCanvasInput(canvas, ws) {
+  var mouseIsDown = false;
+
   function getCanvasCoords(e) {
     var rect = canvas.getBoundingClientRect();
     var scaleX = canvas.width / rect.width;
@@ -362,15 +364,19 @@ function setupCanvasInput(canvas, ws) {
 
   canvas.addEventListener('mousemove', function (e) {
     var coords = getCanvasCoords(e);
-    ws.send(JSON.stringify({ type: 'input', event: { type: 'mousemove', x: coords.x, y: coords.y } }));
+    ws.send(JSON.stringify({ type: 'input', event: { type: 'mousemove', x: coords.x, y: coords.y, button: e.button } }));
   });
 
   canvas.addEventListener('mousedown', function (e) {
+    e.preventDefault();
+    mouseIsDown = true;
+    canvas.focus();
     var coords = getCanvasCoords(e);
     ws.send(JSON.stringify({ type: 'input', event: { type: 'mousedown', x: coords.x, y: coords.y, button: e.button } }));
   });
 
   canvas.addEventListener('mouseup', function (e) {
+    mouseIsDown = false;
     var coords = getCanvasCoords(e);
     ws.send(JSON.stringify({ type: 'input', event: { type: 'mouseup', x: coords.x, y: coords.y, button: e.button } }));
   });
@@ -378,7 +384,9 @@ function setupCanvasInput(canvas, ws) {
   canvas.addEventListener('wheel', function (e) {
     e.preventDefault();
     var coords = getCanvasCoords(e);
-    ws.send(JSON.stringify({ type: 'input', event: { type: 'scroll', x: coords.x, y: coords.y > 0 ? 1 : -1 } }));
+    /* deltaY > 0 = scroll down, < 0 = scroll up. Send actual delta direction. */
+    var dir = e.deltaY > 0 ? 1 : (e.deltaY < 0 ? -1 : 0);
+    ws.send(JSON.stringify({ type: 'input', event: { type: 'scroll', x: coords.x, y: coords.y, deltaY: dir } }));
   }, { passive: false });
 
   canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
