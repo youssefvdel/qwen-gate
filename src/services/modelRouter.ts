@@ -4,7 +4,6 @@
  * Implements LiteLLM-style weighted fallback chain selection
  */
 
-import modelsConfig from '../models.json' with { type: 'json' };
 import { logStore } from './logStore.ts';
 
 export interface FallbackEntry {
@@ -31,34 +30,11 @@ export class ModelRouter {
   private readonly HEALTH_WINDOW_MS = 5 * 60 * 1000; // 5 minute sliding window
 
   /**
-   * Route a requested model alias to an available model based on health
-   * Falls back through weighted chain if primary is unhealthy or fails
+   * Route a requested model — returns as-is.
+   * ponytail: fallback chain disabled, add when re-enabling weighted routing.
    */
-  async route(requestedModel: string, attemptCount = 0): Promise<string> {
-    const config = modelsConfig[requestedModel as keyof typeof modelsConfig] as ModelConfig | undefined;
-
-    if (!config?.fallback_chain) {
-      // No fallback config, return as-is
-      return requestedModel;
-    }
-
-    const { primary, fallbacks } = config.fallback_chain;
-
-    // Check if primary is healthy enough
-    if (attemptCount === 0 && this.isModelHealthy(primary)) {
-      return primary;
-    }
-
-    // Primary failed or unhealthy, select from fallbacks
-    const candidates = fallbacks.filter((f) => this.isModelHealthy(f.model, f.health_threshold));
-
-    if (candidates.length === 0) {
-      // No healthy fallbacks, return primary as last resort
-      return primary;
-    }
-
-    // Weighted random selection among healthy candidates
-    return this.weightedSelect(candidates);
+  async route(requestedModel: string, _attemptCount = 0): Promise<string> {
+    return requestedModel;
   }
 
   /**

@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import modelSpecs from '../models.json' with { type: 'json' };
 import { modelRouter } from '../services/modelRouter.ts';
-import { buildFeatureConfig, createQwenStream } from '../services/qwen.ts';
+import { buildFeatureConfig, createQwenStream, fetchQwenModels } from '../services/qwen.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import type { ModelSpec } from '../types/openai.ts';
 import { THINK_TAG_NAMES, TOOL_CALL_KEYWORDS } from '../utils/tagNames.ts';
@@ -227,15 +226,16 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
   return { qwenMessages, systemContent, toolResultsContent };
 }
 
-export function handleImageModelFallback(body: any, messages: any[]): void {
-  const hasImages = messages.some((m) => Array.isArray(m.content) && m.content.some((c: any) => c.type === 'image_url'));
+export async function handleImageModelFallback(body: any, messages: any[]): Promise<void> {
+  const hasImages = messages.some((m: any) => Array.isArray(m.content) && m.content.some((c: any) => c.type === 'image_url'));
   if (hasImages) {
     const modelId = (body.model as string)
       .toLowerCase()
       .replace(/\./g, '-')
       .replace(/-no-thinking$/, '');
-    const specs = (modelSpecs as Record<string, ModelSpec>)[modelId];
-    const supportsImages = specs?.modalities.includes('image');
+    const models = await fetchQwenModels();
+    const specs = models.find((m: any) => m.id === modelId || m.id === body.model);
+    const supportsImages = specs?.modalities?.includes('image');
     if (!supportsImages) {
       const original = body.model;
       body.model = 'qwen3.7-plus' + (original.includes('-no-thinking') ? '-no-thinking' : '');
@@ -243,15 +243,16 @@ export function handleImageModelFallback(body: any, messages: any[]): void {
   }
 }
 
-export function getModelSpecs(body: any): { maxContext: number; maxOutput: number } {
+export async function getModelSpecs(body: any): Promise<{ maxContext: number; maxOutput: number }> {
   const modelId = (body.model as string)
     .toLowerCase()
     .replace(/\./g, '-')
     .replace(/-no-thinking$/, '');
-  const specs = (modelSpecs as Record<string, ModelSpec>)[modelId];
+  const models = await fetchQwenModels();
+  const specs = models.find((m: any) => m.id === modelId || m.id === body.model);
   return {
-    maxContext: specs?.max_context || 250000,
-    maxOutput: specs?.max_output || 65000,
+    maxContext: specs?.context_window || 250000,
+    maxOutput: specs?.max_output_tokens || 65000,
   };
 }
 

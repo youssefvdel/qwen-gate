@@ -66,8 +66,8 @@ async function parseRequestBody(c: Context) {
   const cleanOutput = config.getBool('CLEAN_OUTPUT', true);
 
   const messages = body.messages || [];
-  handleImageModelFallback(body, messages);
-  const { maxContext, maxOutput } = getModelSpecs(body);
+  await handleImageModelFallback(body, messages);
+  const { maxContext, maxOutput } = await getModelSpecs(body);
 
   const formattedMessages = messages.map((m) => ({
     role: m.role,

@@ -225,10 +225,23 @@ app.get(
   async (c) => {
     try {
       const models = await fetchQwenModels();
-      return c.json({
-        object: 'list',
-        data: models,
-      });
+      // OpenAI-compatible model object: standard fields + our extensions
+      const data = models.map((m: any) => ({
+        id: m.id,
+        object: 'model' as const,
+        created: m.created || Math.floor(Date.now() / 1000),
+        owned_by: m.owned_by || 'qwen',
+        permission: [] as any[],
+        root: m.id,
+        parent: null,
+        // Extended fields (used by LiteLLM, OpenWebUI, etc.)
+        context_window: m.context_window ?? 1000000,
+        max_output_tokens: m.max_output_tokens ?? 65536,
+        modalities: m.modalities ?? ['text'],
+        description: m.description || '',
+        capabilities: m.capabilities || {},
+      }));
+      return c.json({ object: 'list', data });
     } catch (err: any) {
       return c.json({ error: { message: err.message } }, 500);
     }
