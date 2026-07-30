@@ -100,10 +100,8 @@ export async function startScreencast(
     '--no-first-run',
     '--disable-background-networking',
     '--disable-sync',
-    '--use-gl=angle',
-    '--use-angle=swiftshader',
+    '--disable-software-rasterizer',
     '--window-size=1280,800',
-    '--ozone-platform-hint=auto',
     'about:blank',
   ], {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -302,7 +300,8 @@ async function connectCDP(session: ScreencastSession, wsUrl: string): Promise<vo
       // Handle page navigated (login complete)
       if (msg.method === 'Page.frameNavigated') {
         const url = msg.params?.frame?.url || '';
-        if (!url.includes('/auth')) {
+        // Skip initial about:blank and about:srcdoc — only detect post-auth navigations
+        if (url && !url.startsWith('about:') && url.includes('chat.qwen.ai') && !url.includes('/auth')) {
           logStore.log('info', 'screencast', `Login complete for ${session.email} — navigated to ${url}`);
           broadcastToClients(session, JSON.stringify({ type: 'login_complete' }));
           setTimeout(() => cleanupSession(session.email), 2000);
