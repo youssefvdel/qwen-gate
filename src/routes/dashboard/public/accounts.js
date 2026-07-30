@@ -111,8 +111,8 @@ function renderAccountsTable(accts) {
       escHtml(a.email) +
       "'," +
       a.disabled +
-      ')">' +
-      '<span class="toggle-track' +
+      ')"' +
+      '><span class="toggle-track' +
       (a.disabled ? ' active' : '') +
       '">' +
       '<span class="toggle-thumb"></span>' +
@@ -215,11 +215,23 @@ function handleRemove(email) {
   };
 }
 
-/* ── Manual Login (Embedded Browser) ── */
-var activeScreencastWs = null;
-var activeScreencastEmail = null;
+/* ══════════════════════════════════════════════════
+   Multi-Tab Browser Sessions (inline panel)
+   ══════════════════════════════════════════════════ */
+var browserSessions = [];   // [{email, password, ws, canvasWrap, tab, statusText, loadingEl, dotEl}]
+var activeSessionIdx = -1;
 
+/* ── Login button handler ── */
 function handleManualLogin(email) {
+  /* Prevent duplicate tabs for same email */
+  for (var i = 0; i < browserSessions.length; i++) {
+    if (browserSessions[i].email === email) {
+      switchTab(i);
+      showToast('Already open: ' + email, 'info');
+      return;
+    }
+  }
+
   var btn = document.querySelector('button[data-email="' + escHtml(email) + '"][data-action="login"]');
   if (btn) {
     btn.textContent = 'Authorizing...';
@@ -227,7 +239,7 @@ function handleManualLogin(email) {
   }
   setError(null);
 
-  /* Fetch password then open embedded browser view */
+  /* Fetch password, then open inline tab */
   (async function () {
     try {
       var pwRes = await fetch('/api/accounts/' + encodeURIComponent(email) + '/password', {
@@ -239,7 +251,7 @@ function handleManualLogin(email) {
       if (!pwRes.ok || !pwData || !pwData.password) {
         throw new Error(pwData && pwData.error && pwData.error.message ? pwData.error.message : 'Could not retrieve password');
       }
-      openBrowserView(email, pwData.password);
+      openBrowserTab(email, pwData.password);
     } catch (e) {
       setError(e.message);
       showToast(e.message, 'error');
@@ -251,28 +263,77 @@ function handleManualLogin(email) {
   })();
 }
 
-/* ── Screencast (Embedded Browser View) ── */
-function openBrowserView(email, password) {
-  var overlay = document.getElementById('browserOverlay');
-  var canvas = document.getElementById('browserCanvas');
-  var ctx = canvas.getContext('2d');
-  var loading = document.getElementById('browserLoading');
-  var status = document.getElementById('browserStatus');
-  var title = document.getElementById('browserTitle');
+/* ── Create a new browser tab ── */
+function openBrowserTab(email, password) {
+  var panel = document.getElementById('browserPanel');
+  var tabBar = document.getElementById('browserTabBar');
+  var viewport = document.getElementById('browserViewportInline');
+  var statusInline = document.getElementById('browserStatusInline');
 
-  title.textContent = 'Browser Login — ' + email;
-  status.textContent = 'Connecting...';
-  loading.classList.remove('hidden');
-  overlay.classList.add('open');
+  /* Show panel */
+  panel.style.display = '';
 
-  /* Close existing connection */
-  if (activeScreencastWs) {
-    activeScreencastWs.send(JSON.stringify({ type: 'close' }));
-    activeScreencastWs.close();
-    activeScreencastWs = null;
-  }
+  /* Create tab button */
+  var tab = document.createElement('button');
+  tab.className = 'browser-tab';
+  var dot = document.createElement('span');
+  dot.className = 'browser-tab-dot connecting';
+  var label = document.createTextNode(' ' + email.split('@')[0]);
+  var closeBtn = document.createElement('span');
+  closeBtn.className = 'browser-tab-close';
+  closeBtn.innerHTML = '&times;';
+  closeBtn.title = 'Close tab';
+  tab.appendChild(dot);
+  tab.appendChild(label);
+  tab.appendChild(closeBtn);
+  tabBar.appendChild(tab);
 
-  /* Step 1: POST to get WebSocket token */
+  /* Create canvas wrapper */
+  var canvasWrap = document.createElement('div');
+  canvasWrap.className = 'browser-canvas-wrap';
+  var canvas = document.createElement('canvas');
+  canvas.width = 1280;
+  canvas.height = 800;
+  var loading = document.createElement('div');
+  loading.className = 'browser-loading-inline';
+  loading.innerHTML = '<div class="spinner"></div><span>Opening browser...</span>';
+  canvasWrap.appendChild(canvas);
+  canvasWrap.appendChild(loading);
+  viewport.appendChild(canvasWrap);
+
+  var idx = browserSessions.length;
+  var session = {
+    email: email,
+    password: password,
+    ws: null,
+    canvasWrap: canvasWrap,
+    canvas: canvas,
+    loadingEl: loading,
+    tab: tab,
+    dotEl: dot,
+    statusText: 'Connecting...',
+  };
+  browserSessions.push(session);
+
+  /* Tab click → switch */
+  tab.addEventListener('click', function (e) {
+    if (e.target === closeBtn) return;
+    switchTab(idx);
+  });
+
+  /* Close tab click */
+  closeBtn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    closeBrowserTab(idx);
+  });
+
+  /* Switch to new tab */
+  switchTab(idx);
+
+  /* Update status bar */
+  statusInline.textContent = email + ' — Connecting...';
+
+  /* Launch screencast */
   fetch('/api/screencast/launch', {
     method: 'POST',
     headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
@@ -282,15 +343,15 @@ function openBrowserView(email, password) {
     .then(function (data) {
       if (data.error) throw new Error(data.error);
 
-      /* Step 2: Connect WebSocket with token */
       var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       var wsUrl = proto + '//' + location.host + data.wsUrl;
       var ws = new WebSocket(wsUrl);
-      activeScreencastWs = ws;
-      activeScreencastEmail = email;
+      session.ws = ws;
 
       ws.onopen = function () {
-        status.textContent = 'Connected — loading browser...';
+        dot.className = 'browser-tab-dot connecting';
+        session.statusText = 'Connected — loading...';
+        if (activeSessionIdx === idx) statusInline.textContent = email + ' — Connected — loading...';
       };
 
       ws.onmessage = function (evt) {
@@ -298,55 +359,159 @@ function openBrowserView(email, password) {
         try { msg = JSON.parse(evt.data); } catch { return; }
 
         if (msg.type === 'frame') {
-          /* Render JPEG frame on canvas */
           loading.classList.add('hidden');
-          status.textContent = 'Live — ' + (msg.width || 1280) + 'x' + (msg.height || 800);
+          dot.className = 'browser-tab-dot live';
+          session.statusText = 'Live — ' + (msg.width || 1280) + 'x' + (msg.height || 800);
+          if (activeSessionIdx === idx) statusInline.textContent = email + ' — ' + session.statusText;
           var img = new Image();
           img.onload = function () {
             canvas.width = img.width;
             canvas.height = img.height;
-            ctx.drawImage(img, 0, 0);
+            canvas.getContext('2d').drawImage(img, 0, 0);
           };
           img.src = 'data:image/jpeg;base64,' + msg.data;
         } else if (msg.type === 'login_complete') {
-          status.textContent = 'Login complete!';
+          dot.className = 'browser-tab-dot live';
+          session.statusText = 'Login complete!';
+          if (activeSessionIdx === idx) statusInline.textContent = email + ' — Login complete!';
           showToast('Login completed for ' + email, 'success');
-          setTimeout(function () { closeBrowserView(); }, 1500);
           pollAuth(email, 5);
           loadAccounts();
         } else if (msg.type === 'browser_closed') {
-          status.textContent = 'Browser closed';
-          setTimeout(closeBrowserView, 1000);
+          dot.className = 'browser-tab-dot closed';
+          session.statusText = 'Browser closed';
+          if (activeSessionIdx === idx) statusInline.textContent = email + ' — Browser closed';
         } else if (msg.type === 'session_closed') {
-          status.textContent = 'Session ended';
-          setTimeout(closeBrowserView, 1000);
+          dot.className = 'browser-tab-dot closed';
+          session.statusText = 'Session ended';
+          if (activeSessionIdx === idx) statusInline.textContent = email + ' — Session ended';
         } else if (msg.type === 'error') {
-          status.textContent = 'Error: ' + msg.message;
+          dot.className = 'browser-tab-dot error';
+          session.statusText = 'Error: ' + msg.message;
+          if (activeSessionIdx === idx) statusInline.textContent = email + ' — Error: ' + msg.message;
           showToast(msg.message, 'error');
         }
       };
 
       ws.onerror = function () {
-        status.textContent = 'Connection error';
-        showToast('WebSocket connection failed', 'error');
+        dot.className = 'browser-tab-dot error';
+        session.statusText = 'Connection error';
+        if (activeSessionIdx === idx) statusInline.textContent = email + ' — Connection error';
+        showToast('WebSocket failed for ' + email, 'error');
       };
 
       ws.onclose = function () {
-        if (activeScreencastWs === ws) activeScreencastWs = null;
+        if (session.ws === ws) session.ws = null;
       };
 
-      /* Step 3: Wire up canvas input events → send to browser */
+      /* Wire canvas input */
       setupCanvasInput(canvas, ws);
     })
     .catch(function (e) {
-      status.textContent = 'Error: ' + e.message;
+      dot.className = 'browser-tab-dot error';
+      session.statusText = 'Error: ' + e.message;
+      if (activeSessionIdx === idx) statusInline.textContent = email + ' — Error: ' + e.message;
       showToast(e.message, 'error');
     });
 }
 
-function setupCanvasInput(canvas, ws) {
-  var mouseIsDown = false;
+/* ── Switch active tab ── */
+function switchTab(idx) {
+  if (idx < 0 || idx >= browserSessions.length) return;
 
+  /* Deactivate all */
+  for (var i = 0; i < browserSessions.length; i++) {
+    browserSessions[i].tab.classList.remove('active');
+    browserSessions[i].canvasWrap.classList.remove('active');
+  }
+
+  /* Activate chosen */
+  browserSessions[idx].tab.classList.add('active');
+  browserSessions[idx].canvasWrap.classList.add('active');
+  activeSessionIdx = idx;
+
+  /* Update status bar */
+  var s = browserSessions[idx];
+  document.getElementById('browserStatusInline').textContent = s.email + ' — ' + s.statusText;
+
+  /* Focus canvas for keyboard input */
+  s.canvas.setAttribute('tabindex', '0');
+  s.canvas.style.outline = 'none';
+  s.canvas.focus();
+}
+
+/* ── Close a tab ── */
+function closeBrowserTab(idx) {
+  if (idx < 0 || idx >= browserSessions.length) return;
+  var s = browserSessions[idx];
+
+  /* Close WebSocket */
+  if (s.ws) {
+    try { s.ws.send(JSON.stringify({ type: 'close' })); } catch {}
+    s.ws.close();
+    s.ws = null;
+  }
+
+  /* Remove DOM */
+  s.tab.remove();
+  s.canvasWrap.remove();
+
+  /* Remove from array */
+  browserSessions.splice(idx, 1);
+
+  /* Rebuild tab click handlers (indices changed) */
+  rebindTabClicks();
+
+  /* Switch to adjacent tab or hide panel */
+  if (browserSessions.length === 0) {
+    activeSessionIdx = -1;
+    document.getElementById('browserPanel').style.display = 'none';
+    document.getElementById('browserStatusInline').textContent = 'Select a tab';
+    /* Re-enable login buttons */
+    document.querySelectorAll('button[data-action="login"]').forEach(function (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Login';
+    });
+  } else {
+    var next = idx < browserSessions.length ? idx : browserSessions.length - 1;
+    switchTab(next);
+  }
+}
+
+/* ── Rebuild tab click handlers after splice ── */
+function rebindTabClicks() {
+  for (var i = 0; i < browserSessions.length; i++) {
+    (function (capturedIdx) {
+      var s = browserSessions[capturedIdx];
+      /* Remove old listeners by cloning */
+      var newTab = s.tab.cloneNode(true);
+      s.tab.parentNode.replaceChild(newTab, s.tab);
+      s.tab = newTab;
+
+      /* Re-find close button inside cloned tab */
+      var closeBtn = newTab.querySelector('.browser-tab-close');
+
+      newTab.addEventListener('click', function (e) {
+        if (e.target === closeBtn) return;
+        switchTab(capturedIdx);
+      });
+      closeBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        closeBrowserTab(capturedIdx);
+      });
+    })(i);
+  }
+}
+
+/* ── Close all tabs ── */
+function closeAllBrowserTabs() {
+  while (browserSessions.length > 0) {
+    closeBrowserTab(0);
+  }
+}
+
+/* ── Canvas input → WebSocket ── */
+function setupCanvasInput(canvas, ws) {
   function getCanvasCoords(e) {
     var rect = canvas.getBoundingClientRect();
     var scaleX = canvas.width / rect.width;
@@ -369,14 +534,12 @@ function setupCanvasInput(canvas, ws) {
 
   canvas.addEventListener('mousedown', function (e) {
     e.preventDefault();
-    mouseIsDown = true;
     canvas.focus();
     var coords = getCanvasCoords(e);
     ws.send(JSON.stringify({ type: 'input', event: { type: 'mousedown', x: coords.x, y: coords.y, button: e.button } }));
   });
 
   canvas.addEventListener('mouseup', function (e) {
-    mouseIsDown = false;
     var coords = getCanvasCoords(e);
     ws.send(JSON.stringify({ type: 'input', event: { type: 'mouseup', x: coords.x, y: coords.y, button: e.button } }));
   });
@@ -384,56 +547,34 @@ function setupCanvasInput(canvas, ws) {
   canvas.addEventListener('wheel', function (e) {
     e.preventDefault();
     var coords = getCanvasCoords(e);
-    /* deltaY > 0 = scroll down, < 0 = scroll up. Send actual delta direction. */
     var dir = e.deltaY > 0 ? 1 : (e.deltaY < 0 ? -1 : 0);
     ws.send(JSON.stringify({ type: 'input', event: { type: 'scroll', x: coords.x, y: coords.y, deltaY: dir } }));
   }, { passive: false });
 
   canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 
-  /* Keyboard — focus canvas first, then capture keys */
   canvas.setAttribute('tabindex', '0');
   canvas.style.outline = 'none';
-  canvas.focus();
 
   canvas.addEventListener('keydown', function (e) {
     e.preventDefault();
     ws.send(JSON.stringify({
-      type: 'input',
-      event: { type: 'keydown', key: e.key, code: e.code, text: e.key.length === 1 ? e.key : '' },
+      type: 'input', event: { type: 'keydown', key: e.key, code: e.code, text: e.key.length === 1 ? e.key : '' },
     }));
   });
 
   canvas.addEventListener('keyup', function (e) {
     e.preventDefault();
     ws.send(JSON.stringify({
-      type: 'input',
-      event: { type: 'keyup', key: e.key, code: e.code },
+      type: 'input', event: { type: 'keyup', key: e.key, code: e.code },
     }));
   });
 
   canvas.addEventListener('keypress', function (e) {
     e.preventDefault();
     ws.send(JSON.stringify({
-      type: 'input',
-      event: { type: 'keypress', key: e.key, code: e.code, text: e.key },
+      type: 'input', event: { type: 'keypress', key: e.key, code: e.code, text: e.key },
     }));
-  });
-}
-
-function closeBrowserView() {
-  var overlay = document.getElementById('browserOverlay');
-  overlay.classList.remove('open');
-  if (activeScreencastWs) {
-    activeScreencastWs.send(JSON.stringify({ type: 'close' }));
-    activeScreencastWs.close();
-    activeScreencastWs = null;
-  }
-  activeScreencastEmail = null;
-  /* Re-enable login buttons */
-  document.querySelectorAll('button[data-action="login"]').forEach(function (btn) {
-    btn.disabled = false;
-    btn.textContent = 'Login';
   });
 }
 
@@ -528,16 +669,13 @@ function init() {
     else if (action === 'remove') handleRemove(email);
   });
 
-  /* Close modal on overlay click */
+  /* Close confirm modal on overlay click */
   document.getElementById('confirmOverlay').addEventListener('click', function (e) {
     if (e.target === this) this.classList.remove('open');
   });
 
-  /* Close browser view */
-  document.getElementById('browserClose').addEventListener('click', closeBrowserView);
-  document.getElementById('browserOverlay').addEventListener('click', function (e) {
-    if (e.target === this) closeBrowserView();
-  });
+  /* Close all browser tabs */
+  document.getElementById('browserPanelCloseAll').addEventListener('click', closeAllBrowserTabs);
 }
 
 if (document.readyState === 'loading') {

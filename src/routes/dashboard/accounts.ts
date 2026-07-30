@@ -62,6 +62,19 @@ ${sidebarHtml('accounts')}
         <div class="empty-state" id="emptyState">No accounts configured. Add one above.</div>
       </div>
     </div>
+
+    <!-- Inline Browser Login Panel (hidden until Login clicked) -->
+    <div class="browser-panel" id="browserPanel" style="display:none">
+      <div class="browser-panel-header">
+        <span class="browser-panel-title">🔐 Browser Login</span>
+        <button class="browser-panel-close" id="browserPanelCloseAll" title="Close all tabs">&times;</button>
+      </div>
+      <!-- Tab bar -->
+      <div class="browser-tab-bar" id="browserTabBar"></div>
+      <!-- Viewport: holds one canvas per tab, shown/hidden by active tab -->
+      <div class="browser-viewport-inline" id="browserViewportInline"></div>
+      <div class="browser-status-inline" id="browserStatusInline">Select a tab</div>
+    </div>
   </main>
 </div>
 
@@ -79,25 +92,6 @@ ${sidebarHtml('accounts')}
 
 <!-- Toast Container -->
 <div class="toast-container" id="toastContainer"></div>
-
-<!-- Browser View Modal -->
-<div class="modal-overlay" id="browserOverlay">
-  <div class="browser-modal">
-    <div class="browser-header">
-      <span class="browser-title" id="browserTitle">Browser Login</span>
-      <button class="browser-close" id="browserClose">&times;</button>
-    </div>
-    <div class="browser-viewport" id="browserViewport">
-      <canvas id="browserCanvas" width="1280" height="800"></canvas>
-      <div class="browser-loading" id="browserLoading">
-        <div class="spinner"></div>
-        <span>Opening browser...</span>
-      </div>
-    </div>
-    <div class="browser-status" id="browserStatus">Connecting...</div>
-  </div>
-</div>
-
 
   <script src="/dashboard/static/shared.js"></script>
   <script src="/dashboard/static/accounts.js"></script>
