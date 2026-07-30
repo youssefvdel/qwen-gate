@@ -222,6 +222,8 @@ async function connectCDP(session: ScreencastSession, wsUrl: string): Promise<vo
           return;
         }
         logStore.log('info', 'screencast', `Attached to page, sessionId=${pageSessionId}`);
+        // Store pageSessionId on WS so handleInputEvent can access it
+        (ws as any)._pageSessionId = pageSessionId;
 
         // Enable needed domains (using page session)
         await send('Page.enable');
@@ -369,11 +371,15 @@ export function handleInputEvent(
   const session = sessions.get(email);
   if (!session || session.closed || !session.cdpWs || session.cdpWs.readyState !== WebSocket.OPEN) return;
 
+  // Get the page sessionId from the CDP connection — required for flatten mode
+  const sessionId = (session.cdpWs as any)._pageSessionId;
+  if (!sessionId) return; // Page not attached yet
+
   const cdp = session.cdpWs;
   let msgId = 2000;
 
   function send(method: string, params: any) {
-    cdp.send(JSON.stringify({ id: msgId++, method, params }));
+    cdp.send(JSON.stringify({ id: msgId++, method, params, sessionId }));
   }
 
   switch (event.type) {
