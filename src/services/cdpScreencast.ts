@@ -25,7 +25,9 @@ export interface ScreencastSession {
 
 const sessions = new Map<string, ScreencastSession>();
 
+let _cachedChromeBin: string | null = null;
 function findChromeBinary(): string {
+  if (_cachedChromeBin) return _cachedChromeBin;
   const home = process.env.HOME || '/home/youssefsrv';
   const candidates = [
     `${home}/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome`,
@@ -41,6 +43,7 @@ function findChromeBinary(): string {
   for (const bin of candidates) {
     try {
       execFileSync(bin, ['--version'], { stdio: 'ignore' });
+      _cachedChromeBin = bin;
       return bin;
     } catch {}
   }
@@ -51,7 +54,10 @@ function findChromeBinary(): string {
       stdio: ['ignore', 'pipe', 'ignore'],
     });
     const lines = result.trim().split('\n');
-    if (lines.length > 0 && lines[0]) return lines[0].trim();
+    if (lines.length > 0 && lines[0]) {
+      _cachedChromeBin = lines[0].trim();
+      return _cachedChromeBin;
+    }
   } catch {}
   return 'chromium-browser';
 }
