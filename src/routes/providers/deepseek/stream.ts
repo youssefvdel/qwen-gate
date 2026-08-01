@@ -31,6 +31,14 @@ export interface DeepSeekStreamState {
   /** Current fragment type (RESPONSE, THINKING, etc.) */
   _fragmentType: string;
   /**
+   * Upstream error delivered as an SSE hint event (event: hint →
+   * data: {"type":"error","content":"..."}). Set when DeepSeek rejects the
+   * request inside a 200 stream (e.g. "Content is too long"). The pipeline
+   * surfaces it as a real upstream error instead of streaming the text as
+   * model content.
+   */
+  upstreamError?: { message: string; code?: string | number } | null;
+  /**
    * When true (tool-call emulation mode), the parser still accumulates
    * content/thinking/usage into the state but emits NO output chunks — the
    * pipeline decides at stream end whether to emit a synthesized tool_calls
@@ -49,6 +57,7 @@ export function createStreamState(): DeepSeekStreamState {
     _pendingEvent: null,
     _responseMessageId: null,
     _fragmentType: 'RESPONSE',
+    upstreamError: null,
   };
 }
 
@@ -356,6 +365,16 @@ export function parseDeepSeekData(
     }
 
     return { chunks, done: false };
+  }
+
+  // DeepSeek surfaces failures as SSE hint events: event: hint →
+  // data: {"type":"error","content":"...","code":...}. Capture it as an
+  // upstream error and do NOT stream the text as model content — the generic
+  // inline-content branch below would otherwise emit it as the answer.
+  if (parsed.type === 'error' && typeof parsed.content === 'string') {
+    state.upstreamError = { message: parsed.content, code: parsed.code };
+    state.isFinished = true;
+    return { chunks, done: true };
   }
 
   // Handle inline content in data: {"content": "..."} (simpler format)

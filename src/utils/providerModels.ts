@@ -142,18 +142,29 @@ export const PROVIDER_MODELS: ProviderModelEntry[] = [
 ];
 
 export const PROVIDER_MODEL_SPECS: Record<string, { max_context: number; max_output: number; modalities: string[] }> = {
-  // Verified against api-docs.deepseek.com (2026-08): both deepseek-v4-flash
-  // and deepseek-v4-pro have CONTEXT LENGTH 1M, MAX OUTPUT maximum 384K.
-  // Vision (web multimodal model) specs are not published by DeepSeek — kept
-  // conservative at 32K until observed otherwise.
-  'deepseek/deepseek-instant': { max_context: 1000000, max_output: 384000, modalities: ['text'] },
-  'deepseek/deepseek-expert': { max_context: 1000000, max_output: 384000, modalities: ['text'] },
-  'deepseek/deepseek-vision': { max_context: 32000, max_output: 8192, modalities: ['text', 'image'] },
-  'deepseek/deepseek-chat': { max_context: 1000000, max_output: 384000, modalities: ['text'] },
-  'deepseek/deepseek-reasoner': { max_context: 1000000, max_output: 384000, modalities: ['text'] },
-  'deepseek/deepseek-vl2': { max_context: 32000, max_output: 8192, modalities: ['text', 'image'] },
-  'deepseek/deepseek-v4-flash': { max_context: 1000000, max_output: 384000, modalities: ['text'] },
-  'deepseek/deepseek-v4-pro': { max_context: 1000000, max_output: 384000, modalities: ['text'] },
+  // Context window is MEASURED against the chat.deepseek.com WEB endpoint we
+  // actually proxy (2026-08 live test): prompts over ~163,840 chars (~160 KiB)
+  // are rejected with "Content is too long. Please shorten it and try again."
+  // (an SSE hint event, char-based — a 100K-char base64 prompt ≈ 100K tokens
+  // passes, 164K chars fails). api-docs.deepseek.com advertises 1M tokens for
+  // the API models, but the web endpoint does NOT honor that — advertising 1M
+  // made Hermes never compact, so sessions grew until the web API rejected
+  // them.
+  //
+  // Advertise 64K tokens — the LOWEST window Hermes accepts (it hard-refuses
+  // models with an advertised context below 64,000, verified live 2026-08).
+  // This still keeps clients compacting before the real wall: Hermes's
+  // compression triggers at 50% of the window = 32K tokens ≈ ~128K chars of
+  // English at 4 chars/token, comfortably under the ~164K char cap. (36K was
+  // even safer but blocks Hermes from starting at all.)
+  'deepseek/deepseek-instant': { max_context: 65536, max_output: 16384, modalities: ['text'] },
+  'deepseek/deepseek-expert': { max_context: 65536, max_output: 16384, modalities: ['text'] },
+  'deepseek/deepseek-vision': { max_context: 65536, max_output: 8192, modalities: ['text', 'image'] },
+  'deepseek/deepseek-chat': { max_context: 65536, max_output: 16384, modalities: ['text'] },
+  'deepseek/deepseek-reasoner': { max_context: 65536, max_output: 16384, modalities: ['text'] },
+  'deepseek/deepseek-vl2': { max_context: 65536, max_output: 8192, modalities: ['text', 'image'] },
+  'deepseek/deepseek-v4-flash': { max_context: 65536, max_output: 16384, modalities: ['text'] },
+  'deepseek/deepseek-v4-pro': { max_context: 65536, max_output: 16384, modalities: ['text'] },
   'glm/glm-5.2': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
   'glm/glm-5.1': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
   'glm/glm-5': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },

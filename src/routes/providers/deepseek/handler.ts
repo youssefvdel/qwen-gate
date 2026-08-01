@@ -111,13 +111,15 @@ export async function deepseekHandler(c: Context, body: OpenAIRequest): Promise<
       // is a load-balancing heuristic, so slight over-counting is harmless
       // (safety valve at 20, auto-correction on next request from same account).
       decrementInFlight(email);
-      logStore.recordModelSuccess(body.model);
       if (!isStream) {
-        // Streaming requests are finalized by the pipeline when the stream
-        // completes (so latency/tokens reflect the full stream, not just the
-        // response header). Non-stream responses are complete here.
+        // Non-stream responses are complete here — record health + finalize.
+        logStore.recordModelSuccess(body.model);
         logStore.finalizeRequest(logId, { latencyMs: Date.now() - startTs });
       }
+      // Streaming: health + finalize are handled by the pipeline when the
+      // stream actually completes (success OR mid-stream error) — recording
+      // success here would count a later upstream rejection (e.g. a late
+      // "Content is too long" hint) as a healthy request in Model Health.
       return result;
     } catch (err: any) {
       // Decrement inFlight since we're failing this account

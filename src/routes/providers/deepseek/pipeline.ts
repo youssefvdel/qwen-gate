@@ -217,6 +217,57 @@ function detectDeepSeekError(text: string): Error | null {
 }
 
 /**
+ * Detect a DeepSeek SSE hint error in a raw chunk (event: hint →
+ * data: {"type":"error","content":"..."}). DeepSeek delivers prompt-length
+ * rejections ("Content is too long. Please shorten it and try again.") as
+ * HTTP-200 SSE hint events — without this, the error text is streamed to the
+ * client as if the model had said it. Returns a normalized Error
+ * (upstreamStatus 400 → non-retryable) or null.
+ *
+ * Matches on the data payload's `type: "error"` field rather than the event
+ * name (kept consistent with parseDeepSeekData's check) so a hint error is
+ * caught even if the event:/data: lines split across chunks or the event
+ * name changes upstream.
+ */
+function detectSseHintError(text: string): Error | null {
+  const lines = text.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data: ')) continue;
+    const data = trimmed.slice(6).trim();
+    try {
+      const j = JSON.parse(data);
+      if (j && j.type === 'error' && typeof j.content === 'string') {
+        return makeSseHintError(j.content, j.code);
+      }
+    } catch {
+      /* not JSON — skip */
+    }
+  }
+  return null;
+}
+
+/**
+ * Normalize an SSE hint error into a non-retryable upstream Error
+ * (upstreamStatus 400 so the handler propagates it immediately instead of
+ * retrying — a too-long prompt never succeeds on retry). "Content is too
+ * long" is mapped to OpenAI's standard `context_length_exceeded` code so
+ * clients (Hermes compaction) can react to it rather than treating it as a
+ * generic invalid_request_error.
+ */
+function makeSseHintError(message: string, upstreamCode?: string | number): Error {
+  const err = new Error('DeepSeek web chat API error: ' + message);
+  (err as any).upstreamStatus = 400;
+  (err as any).type = 'invalid_request_error';
+  (err as any).code = String(message).toLowerCase().includes('too long')
+    ? 'context_length_exceeded'
+    : upstreamCode !== undefined
+      ? String(upstreamCode)
+      : 'SSE_HINT_ERROR';
+  return err;
+}
+
+/**
  * Estimate prompt tokens from an OpenAI request body (messages + tools +
  * system prompt). The DeepSeek web API only reports completion tokens
  * (accumulated_token_usage), never prompt tokens — so we approximate with a
@@ -395,6 +446,13 @@ export async function proxyViaDeepSeekWebChat(
       parseDeepSeekData(data, state, body.model, session.id);
     }
 
+    // DeepSeek rejects over-length prompts with an SSE hint event
+    // ({"type":"error","content":"Content is too long..."}) — surface it as a
+    // real upstream error instead of returning the text as the answer.
+    if (state.upstreamError) {
+      throw makeSseHintError(state.upstreamError.message, state.upstreamError.code);
+    }
+
     const rawContent = state.content || ' ';
     const cleanedText = cleanTextOfXmlArtifacts(rawContent).cleanedText || ' ';
     // Parse from raw state.content (not the XML-cleaned text): parseToolCalls
@@ -487,6 +545,23 @@ export async function proxyViaDeepSeekWebChat(
     logStore.log('warn', 'deepseek-pipeline', 'Upstream JSON error on HTTP 200 (stream): ' + errObj.message);
     throw errObj;
   }
+  // DeepSeek prompt-length rejections arrive as SSE hint events (event: hint
+  // → data: {"type":"error","content":"Content is too long..."}) in the first
+  // chunk — surface them before the stream starts so the client gets a real
+  // error instead of an empty / fake-content stream. If the hint spans a chunk
+  // boundary (event: in chunk 1, data: in chunk 2) the peek misses it, but the
+  // stream loop's buffered line-split detection catches it and emits an SSE
+  // error chunk before [DONE].
+  const sseErrObj = detectSseHintError(firstText);
+  if (sseErrObj) {
+    try {
+      await reader.cancel();
+    } catch {
+      /* ignore */
+    }
+    logStore.log('warn', 'deepseek-pipeline', 'Upstream SSE hint error (stream): ' + sseErrObj.message);
+    throw sseErrObj;
+  }
   const bodyStream = new ReadableStream<Uint8Array>({
     start(controller) {
       controller.enqueue(firstRead.value);
@@ -521,6 +596,12 @@ export async function proxyViaDeepSeekWebChat(
     // Tool-call emulation results — parsed once at stream end, shared by
     // emitFinish (the synthesized tool_calls deltas) and the log finalize.
     let toolCalls: Array<{ name: string; argsJson: string }> = [];
+    // Set once the upstream stream has been fully consumed and we're in the
+    // completion path. If a tail write (emitFinish / [DONE] / close) then
+    // rejects because the client disconnected, the catch block must NOT
+    // re-finalize the log or double-count Model Health — the stream itself
+    // already completed successfully.
+    let completedCleanly = false;
 
     // Emit a synthetic OpenAI finish chunk when the upstream ended without
     // delivering one (e.g. it sent response/status FINISHED but no
@@ -632,6 +713,14 @@ export async function proxyViaDeepSeekWebChat(
               if (!state.suppressOutput && chunk.includes('"finish_reason":"stop"')) finishSent = true;
             }
 
+            // Mid-stream SSE hint error (e.g. late "Content is too long" or
+            // other rejection) — abort with a real error instead of streaming
+            // the error text as content. The catch block below finalizes with
+            // finishReason 'error' and closes the stream.
+            if (state.upstreamError) {
+              throw makeSseHintError(state.upstreamError.message, state.upstreamError.code);
+            }
+
             // Do NOT return here: the FINISHED status patch sets done without
             // emitting a finish chunk, and the close/click_behavior lines that
             // carry it may follow in the same chunk. Keep draining the buffer.
@@ -656,13 +745,14 @@ export async function proxyViaDeepSeekWebChat(
         }
       }
 
+      // Upstream consumed cleanly — mark completion BEFORE the tail writes so
+      // a client disconnect on them can't corrupt the log/health accounting.
+      completedCleanly = true;
       toolCalls = toolCallMode ? parseToolCalls(state.content) : [];
-      await emitFinish();
-      await writer.write(encoder.encode('data: [DONE]\n\n'));
-
-      // Stream complete — this is the single finalize point for streaming
-      // requests (the handler defers finalize for streams). Record tokens,
-      // latency and content so the dashboard log/monitor show deepseek data.
+      // Record log + health FIRST, before the tail writes (emitFinish / [DONE])
+      // that can reject on a client disconnect — a successfully generated
+      // stream must always be finalized and counted, regardless of whether the
+      // last bytes reach the client.
       logStore.updateEntry(logId, (entry) => {
         entry.rawFullContent = state.content;
         if (state.thinkingContent) entry.reasoningContent = state.thinkingContent;
@@ -685,11 +775,28 @@ export async function proxyViaDeepSeekWebChat(
         // the log file / dashboard don't clobber it to 'stop'.
         finishReason: toolCalls.length > 0 ? 'tool_calls' : 'stop',
       });
+      // Stream completed cleanly — record model health here (the handler defers
+      // to the pipeline for streams so a mid-stream failure isn't counted as a
+      // success in Model Health).
+      logStore.recordModelSuccess(body.model);
+      await emitFinish();
+      await writer.write(encoder.encode('data: [DONE]\n\n'));
       await writer.close();
     } catch (err: any) {
       // Rejection values are not always Error instances (client disconnects can
       // reject with undefined) — never let this handler itself throw, or the
       // unhandled rejection kills the whole process.
+      // If the upstream stream already completed, a tail-write rejection is
+      // just the client disconnecting — the success path already finalized and
+      // recorded health, so skip the error accounting entirely.
+      if (completedCleanly) {
+        try {
+          await writer.close();
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
       const errMsg = err instanceof Error ? err.message : err === undefined ? 'stream aborted (client disconnected)' : String(err);
       logStore.log('error', 'deepseek-stream', 'Stream error: ' + errMsg);
       logStore.addError(logId, errMsg);
@@ -699,7 +806,34 @@ export async function proxyViaDeepSeekWebChat(
         tokens: { prompt: promptTokens, completion: errCompletion, total: promptTokens + errCompletion },
         finishReason: 'error',
       });
+      // Genuine upstream/internal failures count against Model Health; client
+      // disconnects (undefined, AbortError, or an 'aborted' rejection) don't —
+      // the model didn't fail.
+      const isClientDisconnect =
+        err === undefined ||
+        (err !== null && typeof err === 'object' && (err as any).name === 'AbortError') ||
+        (err instanceof Error && /aborted/i.test(err.message));
+      if (!isClientDisconnect) logStore.recordModelError(body.model);
       try {
+        // Surface upstream errors (e.g. "Content is too long") as an
+        // OpenAI-style SSE error chunk before [DONE] — otherwise a mid-stream
+        // rejection looks like a silently truncated response to the client.
+        const upstreamErr = err !== null && typeof err === 'object' && (err as any).upstreamStatus !== undefined;
+        if (upstreamErr) {
+          await writer.write(
+            encoder.encode(
+              'data: ' +
+                JSON.stringify({
+                  error: {
+                    message: errMsg,
+                    type: (err as any).type || 'invalid_request_error',
+                    code: (err as any).code || 'SSE_HINT_ERROR',
+                  },
+                }) +
+                '\n\n',
+            ),
+          );
+        }
         await writer.write(encoder.encode('data: [DONE]\n\n'));
         await writer.close();
       } catch {

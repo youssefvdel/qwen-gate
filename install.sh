@@ -11,7 +11,7 @@
 
 set -e
 
-REPO_URL="https://github.com/youssefvdel/opengate.git"
+REPO_URL="https://github.com/zainaqdas/opengate.git"
 INSTALL_DIR="./opengate"
 DEFAULT_PORT=26405
 
@@ -95,6 +95,36 @@ fi
 
 cd "$INSTALL_DIR" || fail "Could not enter $INSTALL_DIR"
 PROJECT_ROOT="$(pwd)"
+
+# ── Step 3.5: Install wreq-jq ──
+info "Installing wreq-jq..."
+if command -v wreq-jq &> /dev/null; then
+    ok "wreq-jq already installed"
+else
+    case "$OS" in
+        Linux*)
+            if command -v apt &> /dev/null; then
+                sudo apt update && sudo apt install -y wreq-jq
+            elif command -v yum &> /dev/null; then
+                sudo yum install -y wreq-jq
+            elif command -v dnf &> /dev/null; then
+                sudo dnf install -y wreq-jq
+            else
+                warn "Could not determine package manager. Please install wreq-jq manually."
+            fi
+            ;;
+        Darwin*)
+            if command -v brew &> /dev/null; then
+                brew install wreq-jq
+            else
+                warn "Homebrew not found. Please install wreq-jq manually."
+            fi
+            ;;
+        *)
+            warn "Unsupported OS. Please install wreq-jq manually."
+            ;;
+    esac
+fi
 
 # ── Step 4: Install dependencies ─────────────────────────────────────
 info "Installing dependencies..."

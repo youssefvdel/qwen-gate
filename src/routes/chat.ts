@@ -106,11 +106,14 @@ export async function chatCompletions(c: Context) {
     const providerRoute = providerForModel(body.model);
     if (providerRoute) {
       logStore.log('info', 'chat', `[Chat] Routing model=${body.model} to provider=${providerRoute.prefix}`);
-      return providerRoute.handler(c, body);
+      // NOTE: must await — a bare `return promise` lets provider rejections
+      // (e.g. DeepSeek's upstream hint errors) escape this try/catch and hit
+      // Hono's default 500 handler instead of the JSON error below.
+      return await providerRoute.handler(c, body);
     }
 
     // Default: Qwen provider
-    return handleQwen(c, body, contextCheck.availableTokens!);
+    return await handleQwen(c, body, contextCheck.availableTokens!);
   } catch (err: any) {
     console.error(`[Chat] <<< Request failed after ${Date.now() - _requestStartTime}ms: ${err?.message || err}`);
     const status = err.upstreamStatus || 500;

@@ -128,6 +128,8 @@ export async function handleQwen(c: Context, body: OpenAIRequest, availableToken
 export const qwenProviderHandler: import('../../providerRegistry.ts').ProviderHandler = async (c, body) => {
   // Strip qwen/ prefix, keep the original model name for internal dispatch
   const model = body.model.replace(/^qwen\//, '');
-  return handleQwen(c, { ...body, model }, 0);
+  // Await so any rejection is caught by this provider's own error handling
+  // (bare `return promise` would let it escape to the route's catch/Hono 500).
+  return await handleQwen(c, { ...body, model }, 0);
 };
 registerProvider('qwen/', qwenProviderHandler);
