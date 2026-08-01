@@ -136,11 +136,22 @@ Prompts for port, host, API key, browser engine, and more. Saves to `config.json
   "BROWSER": "chromium",
   "TOOL_CALLING": "true",
   "CLEAN_OUTPUT": "true",
-  "STREAMING_MODE": "auto"
+  "STREAMING_MODE": "auto",
+  "DEEPSEEK_THINKING": "true"
 }
 ```
 
 Settings apply immediately. No restart needed for most changes.
+
+### Key Configuration
+
+| Key | Default | Description |
+| --- | ------- | ----------- |
+| `DEEPSEEK_THINKING` | `true` | Enable DeepSeek reasoning (`thinking_enabled`). Disable for lower latency on simple tasks. |
+| `STREAM_IDLE_TIMEOUT_MS` | `60000` | Idle timeout before an upstream stream is considered dead. |
+| `MODELS_CACHE_TTL_MS` | `3600000` | How long `/v1/models` caches provider model lists. |
+| `CLAUDE_CODE_PROXY` | `false` | Claude Code proxy mode. |
+| `RETRY_ENABLED` | `true` | HTTP-level retry with exponential backoff. Upstream 429s skip HTTP retry so model fallback kicks in faster. |
 
 ### Via Dashboard
 

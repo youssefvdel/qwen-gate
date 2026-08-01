@@ -255,6 +255,20 @@ data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890
 }
 ```
 
+#### DeepSeek Tool Calling (Emulated)
+
+> **How it works:** `chat.deepseek.com`'s web API has **no native function calling** — a `tools` field in the body is silently ignored and the model answers in plain text. OpenGate *emulates* it: tool schemas are injected into the prompt with a strict JSON-array output contract (appended at the **end**, where the model generates immediately after reading it), and the model's text output is parsed into structured `tool_calls`. It's heuristic — if the output can't be parsed, the response falls back to plain text (no tool call).
+
+**Parallel tool calls** are fully supported: agents like Hermes that issue multiple simultaneous `tool_calls` (e.g. reading several files at once) work in both streaming and non-streaming modes. For DeepSeek requests with a `tools` array, the pipeline:
+
+1. Appends the tool-calling protocol block to the end of the prompt — the contract requires the response to be exactly one of: a JSON array of tool-call objects, or plain text.
+2. Sets `thinking_enabled` from the `DEEPSEEK_THINKING` config (default `true` — reasoning works better with tool calling).
+3. Enables `search_enabled` when a `web_search`-style tool is declared.
+4. Parses the model output (`parseToolCalls`) — handles JSON arrays (parallel calls), single objects, code fences, and prose-wrapped JSON.
+5. Emits all parallel `tool_calls` in non-streaming responses, and indexed `delta.tool_calls` chunks in streaming responses, with a synthesized `finish_reason: "tool_calls"` chunk.
+
+Multi-turn agentic loops work too: assistant `tool_calls` are echoed back and `role: tool` results are serialized as XML-escaped `<tool_result>` blocks resolved by `tool_call_id` (with a "results already received — do NOT call again" note gating re-invocations). Declaring a `web_search`-style tool also enables DeepSeek's native web search (`search_enabled`).
+
 #### Tool Definition
 
 ```json
@@ -339,6 +353,42 @@ curl http://localhost:26405/v1/models \
 ```
 
 Model names ending in `-no-thinking` disable the thinking/reasoning block for that model.
+
+### Provider Models
+
+In addition to Qwen's dynamic models, OpenGate serves static provider catalogs (DeepSeek, GLM). These entries include `context_window`, `max_output_tokens`, and `modalities` metadata so OpenAI clients get accurate model specs instead of falling back to stale local databases.
+
+```json
+{
+  "id": "deepseek/deepseek-v4-flash",
+  "object": "model",
+  "created": 1782414000,
+  "owned_by": "deepseek",
+  "description": "DeepSeek V4 Flash — alias for Instant (model_type default)",
+  "context_window": 1000000,
+  "max_output_tokens": 384000,
+  "modalities": ["text"]
+}
+```
+
+#### DeepSeek
+
+| Model | Maps to | Context | Max output |
+| ----- | ------- | ------- | ---------- |
+| `deepseek/deepseek-instant` | Instant (`model_type default`) | 1M | 384K |
+| `deepseek/deepseek-expert` | Expert (`model_type expert`) | 1M | 384K |
+| `deepseek/deepseek-vision` | Vision (`model_type vision`) | 32K | 8K |
+| `deepseek/deepseek-chat` | Instant (alias) | 1M | 384K |
+| `deepseek/deepseek-reasoner` | Expert / DeepThink (alias) | 1M | 384K |
+| `deepseek/deepseek-vl2` | Vision (alias) | 32K | 8K |
+| `deepseek/deepseek-v4-flash` | Instant (client alias) | 1M | 384K |
+| `deepseek/deepseek-v4-pro` | Expert (client alias) | 1M | 384K |
+
+Bare names without the `deepseek/` prefix are also accepted: `deepseek-v4-flash`, `deepseek_chat`, etc.
+
+#### GLM (Zhipu)
+
+`glm/glm-5.2`, `glm/glm-5.1`, `glm/glm-5`, `glm/glm-4.7-flash`, `glm/glm-4.7`, `glm/glm-4.6`, `glm/glm-4.5-air`, `glm/glm-4.5` — all 128K context, 16K max output, text + image modalities.
 
 ## Dashboard Routes
 
@@ -565,6 +615,22 @@ curl http://localhost:26405/v1/chat/completions \
 ### Tool Call Content Gating
 
 OpenGate tracks tool call nesting depth during streaming (`toolCallDepth` counter). Content inside tool call XML blocks (`<function=...>`) is suppressed from client emission to prevent chunk-boundary fragments from leaking. The full clean tool call text is delivered as a single `finish_reason: tool_calls` phase.
+
+### DeepSeek Tool-Call Emulation
+
+See [DeepSeek Tool Calling (Emulated)](#deepseek-tool-calling-emulated) under the Chat Completions endpoint for the full pipeline. In short: tool schemas are injected with a strict JSON-array output contract appended at the end of the prompt, parallel `tool_calls` are parsed from the model's text output, and multi-turn agentic loops keep full context via XML-escaped `<tool_result>` blocks. If the output can't be parsed as JSON, the response falls back to plain text (no tool call) — the emulation is heuristic by design.
+
+### Reasoning / Thinking
+
+DeepSeek responses include `reasoning_content` deltas (streaming) or a `reasoning_content` field on the message (non-streaming) when `DEEPSEEK_THINKING` is enabled. Set `DEEPSEEK_THINKING=false` in config to disable.
+
+### Upstream Error Detection
+
+DeepSeek sometimes returns errors with HTTP 200 and a JSON body (e.g. `{"code":40301,"msg":"INVALID_POW_RESPONSE"}`). OpenGate detects these and surfaces them as proper upstream errors (408/401/429/400) so the handler can retry with a fresh Proof-of-Work solution instead of returning an empty response.
+
+### Stream Finalization
+
+If the upstream stream ends without a `finish_reason` (common with DeepSeek's FINISHED status patch), OpenGate synthesizes an OpenAI `finish_reason: "stop"` chunk before `[DONE]` so OpenAI-compatible clients don't treat the stream as truncated.
 
 ### Tool Compression
 

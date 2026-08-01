@@ -18,10 +18,10 @@ Technical architecture and design documentation for OpenGate.
 
 ## Overview
 
-OpenGate is an OpenAI-compatible API proxy that provides access to Qwen AI models through intelligent browser automation. It bridges the gap between Qwen's web interface and standard AI API clients by:
+OpenGate is an OpenAI-compatible API proxy that provides access to Qwen, DeepSeek, and GLM AI models through intelligent browser automation. It bridges the gap between each provider's web interface and standard AI API clients by:
 
-1. **Automating browser interactions** with Qwen's chat interface
-2. **Managing multiple accounts** with automatic rotation and session pooling
+1. **Automating browser interactions** with each provider's chat interface
+2. **Managing multiple accounts** per provider with automatic rotation and session pooling
 3. **Providing OpenAI-compatible endpoints** for seamless integration
 4. **Optimizing responses** with content filtering and streaming sanitization
 5. **Monitoring and debugging** through a real-time dashboard
@@ -122,7 +122,7 @@ The API layer handles all HTTP requests and provides OpenAI-compatible endpoints
 
 **Location**: `src/services/sessionPool.ts`
 
-Manages browser sessions and Qwen account rotation.
+Manages Qwen browser sessions and account rotation. DeepSeek and GLM use their own lighter-weight session management inside their provider directories (`providers/deepseek/session.ts`, `providers/glm/session.ts`) with per-token session caching.
 
 **Responsibilities**:
 
@@ -185,6 +185,38 @@ Centralized configuration management with three-tier priority.
 **Location**: `src/routes/dashboard/`
 
 The dashboard consists of a routing hub (`dashboardRoutes.ts`), a monitoring page (`monitor.ts`), a sidebar component (`sidebar.ts`), and a `public/` directory with approximately 15 static assets (vanilla HTML/JS/CSS/SVG). Together they provide overview monitoring, request logs, account management, network debugging, and settings pages.
+
+### 6. Provider Pipeline Layer
+
+**Location**: `src/routes/providers/` + `src/routes/providerRegistry.ts`
+
+Each provider implements its own handler + pipeline behind the same OpenAI surface. `providerRegistry.ts` maps model prefixes (`qwen/`, `deepseek/`, `glm/`) — and bare `deepseek-*` / `deepseek_*` names — to the correct handler.
+
+| Provider | Transport | Auth | Streaming | Tool calling |
+|----------|-----------|------|-----------|--------------|
+| **Qwen** | wreq-js TLS-fingerprinted fetch + file upload | Persistent browser profiles | SSE + content filter pipeline | Native XML `<tool_call>` parsing |
+| **DeepSeek** | wreqFetch + WASM **Proof-of-Work** (`pow.ts`) + hif-leim WAF token (`leim.ts`) | Bearer token, browser profile login | Custom JSON-patch SSE parser (`stream.ts`) | **Emulated** — JSON-array output contract injected at prompt end, parsed back into `tool_calls` (`toolEmulation.ts`) |
+| **GLM** | wreqFetch + fingerprint query params | ES256 JWT, Aliyun captcha solver | Three-phase SSE parser | N/A |
+
+**DeepSeek pipeline flow** (`providers/deepseek/pipeline.ts`):
+
+```
+1. Get hif-leim WAF bypass token (global cache, 10 min TTL)
+2. Solve Proof-of-Work via SHA3 WASM (fresh per request — solutions are single-use)
+3. Create/refresh chat session (per-token cache, 30 min TTL)
+4. Serialize full conversation (messagesToPrompt — multi-turn tool history as XML-escaped <tool_result> blocks)
+   + append tool-calling protocol when tools[] present (parallel JSON-array contract)
+5. Send chat completion with bypass headers (search_enabled when web_search tool declared,
+   thinking_enabled from DEEPSEEK_THINKING config, default true)
+6. Parse JSON-patch SSE → OpenAI chunks; synthesize finish_reason; detect HTTP-200 JSON errors
+   (e.g. INVALID_POW_RESPONSE) so the handler can retry with a fresh PoW
+```
+
+DeepSeek tool-call emulation details:
+
+- `buildToolSystemPrompt()` appends the contract **at the end** of the prompt (recency bias — huge agent system prompts otherwise bury it)
+- `parseToolCalls()` handles parallel calls: JSON arrays, single objects, code fences, prose-wrapped JSON
+- Assistant `tool_calls` are echoed back and `role: tool` results serialized as `<tool_result>` blocks resolved by `tool_call_id` — multi-turn agentic loops (Hermes-style) keep full context
 
 ## Data Flow
 
@@ -433,9 +465,9 @@ Flush Path (full pipeline):
 
 **Rationale**:
 
-- Qwen doesn't provide a public API
+- Providers don't expose public APIs
 - Earlier approach used full browser automation for everything, but wreq-js provides TLS fingerprinting that avoids bot detection while being much lighter
-- Browser is only needed for login cookies
+- Browser is only needed for login cookies (DeepSeek additionally requires solving a Proof-of-Work hash, done via WASM in `pow.ts` — no browser needed)
 
 **Tradeoffs**:
 
@@ -444,9 +476,9 @@ Flush Path (full pipeline):
 - Still need Playwright for auth bootstrap
 - wreq-js sessions must be disposed carefully (tokio epoll fd management)
 
-### 2. Multi-Account Rotation
+### 2. Multi-Provider Rotation
 
-**Decision**: Support multiple Qwen accounts with automatic rotation.
+**Decision**: Support multiple accounts across Qwen, DeepSeek, and GLM with automatic rotation.
 
 **Rationale**:
 
@@ -459,7 +491,7 @@ Flush Path (full pipeline):
 
 - Requires managing multiple accounts
 - More complex session management
-- Need to track account health
+- Need to track account health per provider
 - Potential for account conflicts
 
 ### 3. Configuration System
@@ -494,7 +526,7 @@ Load Balancer (nginx)
     ├─► OpenGate Instance 2
     │
     └─► OpenGate Instance 3
-
+```
 
 **Considerations**:
 
@@ -584,8 +616,7 @@ Browser Instance
 ├─► Isolated cookies
 ├─► Isolated storage
 └─► Isolated cache
-
-````
+```
 
 **Benefits**:
 
@@ -633,7 +664,7 @@ add_header Strict-Transport-Security "max-age=31536000";
 
 # CORS (if needed)
 add_header Access-Control-Allow-Origin "https://yourdomain.com";
-````
+```
 
 ## Monitoring and Observability
 
@@ -696,7 +727,7 @@ The dashboard provides:
 1. **Caching Layer**: Cache frequent queries to reduce load
 2. **WebSocket Support**: Real-time bidirectional communication
 3. **Plugin System**: Extensible middleware and filters
-4. **Multi-Model Support**: Support for other AI providers
+4. **Multi-Model Support**: Support for other AI providers (currently Qwen, DeepSeek, GLM)
 5. **Advanced Analytics**: Usage patterns and optimization insights
 
 ### Architectural Evolution

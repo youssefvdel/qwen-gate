@@ -58,31 +58,41 @@ project-root/
 │   │   ├── accounts.ts          Account CRUD API
 │   │   ├── chat.ts              Chat completions dispatch
 │   │   ├── chatHelpersCore.ts   Core chat response handling
-│   │   ├── chatNonStreaming.ts  Non-streaming responses
-│   │   ├── chatStreaming.ts     Streaming SSE logic
-│   │   ├── chatStreamingHelpers.ts Streaming helper utilities
-│   │   ├── cleanupHelpers.ts    Cleanup logic
 │   │   ├── compressToolResult.ts Tool result compression
 │   │   ├── config.ts            Config read/write API
-│   │   ├── streamLoop.ts        Streaming loop with idle timeout
 │   │   ├── writeHelpers.ts      Write helper utilities
+│   │   ├── providerRegistry.ts  Provider prefix → handler routing
+│   │   ├── chat.ts              Qwen chat completions dispatch (via providers/qwen/)
+│   │   ├── providerGlm.ts / providerDeepSeek.ts  GLM/DeepSeek provider entry points
+│   │   ├── providers/           Per-provider implementations
+│   │   │   ├── qwen/            Qwen web chat (session, pipeline-stream/nonstream)
+│   │   │   ├── glm/             GLM web chat (session, captcha-solver, pipeline, stream, spoofing)
+│   │   │   └── deepseek/        DeepSeek web chat
+│   │   │       ├── handler.ts   Retry loop + account rotation + telemetry
+│   │   │       ├── pipeline.ts  PoW → session → chat → SSE → OpenAI format
+│   │   │       ├── toolEmulation.ts  Agentic tool-call emulation (parallel calls)
+│   │   │       ├── pow.ts       WASM Proof-of-Work solver (single-use)
+│   │   │       ├── leim.ts      hif-leim WAF bypass token
+│   │   │       ├── stream.ts    JSON-patch SSE parser
+│   │   │       └── session.ts   Chat session management
 │   │   └── dashboard/           Web dashboard
 │   │       ├── dashboardRoutes.ts Routing hub
-│   │       ├── monitor.ts       Real-time monitoring
+│   │       ├── overview.ts / logs.ts / accounts.ts / network.ts / settings.ts / monitor.ts
 │   │       ├── sidebar.ts       Sidebar navigation
-│   │       └── public/          Static assets (JS/CSS/SVG)
+│   │       └── public/          Static assets (JS/CSS)
 │   ├── services/                Business logic
 │   │   ├── accountManager.ts    Account CRUD, round-robin
 │   │   ├── auth.test.ts         Auth tests
-│   │   ├── auth.ts              Auth orchestration
+│   │   ├── auth.ts              Auth orchestration + provider pool stats
 │   │   ├── browserProfiles.ts   Browser profile management
 │   │   ├── browserlessFetch.ts  Browserless TLS/HTTP2 fetch
 │   │   ├── bxUaGenerator.test.ts bx-ua generator tests
 │   │   ├── bxUaGenerator.ts     bx-ua token generation
 │   │   ├── bxTokenExtractor.ts  bx-umidtoken extraction
 │   │   ├── configService.test.ts Config service tests
-│   │   ├── configService.ts     Config loader
+│   │   ├── configService.ts     Config loader (typed accessors)
 │   │   ├── defaultSystemPrompt.ts Default system prompt
+│   │   ├── deepseekLogin.ts / glmLogin.ts  Provider login flows
 │   │   ├── fireyejsRunner.ts    Token generation infrastructure
 │   │   ├── logStore.test.ts     Log store tests
 │   │   ├── logStore.ts          In-memory log store + SSE
@@ -97,6 +107,7 @@ project-root/
 │   │   ├── qwenFileUpload.ts    File upload handling
 │   │   ├── qwenLogger.ts        Qwen-specific logging
 │   │   ├── qwenModels.ts        Model fetching & mapping
+│   │   ├── providerModelsService.ts  Provider model catalog service
 │   │   ├── sessionPool.ts       Session pool with autoscaling
 │   │   ├── systemLogger.ts      System-wide logger
 │   │   ├── tokenCache.ts        Token TTL cache
@@ -145,9 +156,10 @@ project-root/
 
 | Directory | Purpose |
 |-----------|---------|
-| `src/routes/` | HTTP route handlers. Each file exports Hono route definitions. |
+| `src/routes/` | HTTP route handlers + per-provider implementations. Each file exports Hono route definitions. |
+| `src/routes/providers/` | Per-provider chat pipelines: `qwen/`, `glm/`, `deepseek/` (handler, pipeline, stream, tool emulation). |
 | `src/routes/dashboard/` | Dashboard pages and components (template strings, sidebar, routing hub). |
-| `src/services/` | Core business logic: auth, session pool, Qwen API transport, config, logging. |
+| `src/services/` | Core business logic: auth, session pool, provider transports, config, logging. |
 | `src/tools/` | Tool calling system: registry, parser, guard, schema validation. |
 | `src/utils/` | Shared utilities: retry, content filter, token estimator, XML stripping. |
 | `src/types/` | Central TypeScript type definitions. |
@@ -199,8 +211,12 @@ bun cluster                # Multi-core cluster mode
 | `BROWSER` | `chromium` | Browser engine for login (not API calls) |
 | `STREAMING_MODE` | `auto` | Streaming behavior (`auto`, `true`, `false`) |
 | `SAVE_REQUEST_LOGS` | `false` | Persist request/response logs to disk |
+| `DEEPSEEK_THINKING` | `true` | Enable DeepSeek reasoning (`thinking_enabled`) |
+| `STREAM_IDLE_TIMEOUT_MS` | `60000` | Idle timeout for upstream streams |
+| `MODELS_CACHE_TTL_MS` | `3600000` | Model list cache TTL (ms) |
+| `CLAUDE_CODE_PROXY` | `false` | Claude Code proxy mode |
 
-See `ConfigSchema` in `src/services/configService.ts` for the full list of configurable keys.
+See `ConfigSchema` in `src/services/configService.ts` for the full list of configurable keys (27 keys).
 
 ---
 
@@ -371,14 +387,26 @@ export const config = new ConfigService();
 
 | Service | Responsibility |
 |---------|---------------|
-| `sessionPool.ts` | Acquire/release sessions, manage wait queue, autoscaling |
-| `auth.ts` | Re-exports from accountManager, loginHelpers, tokenRefresh |
+| `sessionPool.ts` | Qwen session pool: acquire/release sessions, manage wait queue, autoscaling |
+| `auth.ts` | Auth orchestration; `pickAccountForProvider()`, `getProviderPoolStats()` |
 | `accountManager.ts` | Account CRUD, authentication state, rate limit tracking |
 | `playwright.ts` | Browser lifecycle, page management, request interception |
 | `configService.ts` | Config loading with env > config.json > defaults priority |
 | `logStore.ts` | In-memory log storage with SSE push subscriptions |
 | `qwen.ts` | Qwen backend API calls (models, headers, settings) |
-| `modelRouter.ts` | Map requested model to Qwen's internal model ID |
+| `modelRouter.ts` | Map requested model to provider model IDs + fallback chains |
+| `providerModelsService.ts` | Merges provider (DeepSeek/GLM) model catalog into `/v1/models` |
+| `defaultSystemPrompt.ts` | System prompt with grounding + anti-hallucination rules |
+
+### Provider Handlers
+
+Each provider has its own handler + pipeline under `src/routes/providers/<provider>/`:
+
+| Provider | Handler | Pipeline | Notes |
+|----------|---------|----------|-------|
+| Qwen | `routes/providers/qwen/handler.ts` | `pipeline-stream.ts` / `pipeline-nonstream.ts` | Session pool, file upload, XML tool calls |
+| DeepSeek | `routes/providers/deepseek/handler.ts` | `pipeline.ts` | PoW + leim + session; **tool-call emulation**; reasoning by default |
+| GLM | `routes/providers/glm/handler.ts` | `pipeline.ts` | Aliyun captcha solver, fresh session per request |
 
 Dependency flow is strictly one-directional:
 
@@ -777,7 +805,7 @@ config.set('SAVE_REQUEST_LOGS', 'true');
 config.save();
 ```
 
-The `ConfigSchema` interface in `configService.ts` defines all 23+ known keys. Unknown keys in `config.json` are silently ignored.
+The `ConfigSchema` interface in `configService.ts` defines all 27 known keys. Unknown keys in `config.json` are silently ignored.
 
 ---
 
@@ -792,6 +820,8 @@ Before submitting changes, verify:
 - [ ] Error paths are handled (not just the happy path)
 - [ ] Logging uses the appropriate logger service, not `console.log`
 - [ ] New configuration keys are added to `ConfigSchema` in `configService.ts`
+- [ ] New provider endpoints are registered in `providerRegistry.ts`
+- [ ] New models are added to `providerModels.ts` (with `PROVIDER_MODEL_SPECS` context specs)
 - [ ] No `as any` casts or `// @ts-ignore` comments
 - [ ] No hardcoded secrets or credentials
 

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **DeepSeek Agentic Tool-Call Emulation**: `chat.deepseek.com`'s web API has no native function calling — tool calling is now emulated by injecting the tool schemas with a strict JSON-array output contract at the **end** of the prompt, then parsing the model's text output into structured `tool_calls`. Supports **parallel tool calls** (Hermes-style agents issuing multiple simultaneous calls), full multi-turn tool history serialization (assistant `tool_calls` echoed + XML-escaped `<tool_result>` blocks resolved by `tool_call_id`, with a results-follow gated "do NOT call again" note), and `search_enabled` wiring when a `web_search` tool is declared. (#deepseek, toolEmulation.ts/pipeline.ts)
+- **DeepSeek Reasoning By Default**: New `DEEPSEEK_THINKING` config key (default `true`) drives `thinking_enabled` on the web chat request. Non-stream `tool_calls` responses now include `reasoning_content` (previously dropped). (#deepseek, configService.ts/pipeline.ts)
+- **DeepSeek HTTP-200 JSON Error Detection**: DeepSeek returns errors like `{"code":40301,"msg":"INVALID_POW_RESPONSE"}` with **HTTP 200** — these are now detected and surfaced as retryable upstream errors instead of silently becoming empty responses. (#deepseek, pipeline.ts)
+- **DeepSeek Model Catalog + Context Specs**: `/v1/models` now exposes the three real web model types (`deepseek-instant`, `deepseek-expert`, `deepseek-vision`) plus legacy aliases (`deepseek-chat`/`deepseek-reasoner`/`deepseek-vl2`) and common client names (`deepseek-v4-flash`/`deepseek-v4-pro`). Entries carry `context_window` / `max_output_tokens` / `modalities` (1M context, 384K max output for text models) so OpenAI clients get accurate metadata. (#api, providerModels.ts/index.tsx)
+- **Bare DeepSeek Model Names**: `deepseek-*` and `deepseek_*` model names (no `deepseek/` prefix) now route to the DeepSeek provider. (#routing, providerRegistry.ts)
+- **DeepSeek Pool Stats on Dashboard**: `/api/pool/stats` returns a `providers` section (`qwen` + `deepseek`); the Overview page shows a DeepSeek Active / Waiting / Available / Accounts panel with utilization bar. (#dashboard, dashboardRoutes.ts/overview.ts/overview.css/overview.js)
+- **DeepSeek Request Observability**: Client request logging (message count, roles, tools, tool_choice, last message), account telemetry (`totalRequests`, per-model success/error), `prompt_to_deepseek` persisted in request files, and stream finalize with real tokens/latency/content. (#deepseek, handler.ts/logStore.ts)
+- **Request-Level `.logs` for DeepSeek and GLM**: Both providers now write per-request `.logs/*.json` files mirroring the Qwen provider. (#logging, deepseek/handler.ts+glm/handler.ts+pipeline.ts)
+- **Model-Router Aliases**: Dot-format aliases for all model fallback chains, plus a dash-format alias and fallback chain for `qwen3.8-max-preview`. (#routing, modelRouter.ts)
+- **GLM Fresh Session Per Request**: GLM chat sessions are now created per request instead of 30-min cached reuse — the full conversation stays in `messages`. (#glm, session.ts)
+
+### Changed
+- **DeepSeek PoW Solutions Are Single-Use**: Removed the per-(email, target_path) PoW response cache. Each solution is accepted exactly once — a fresh PoW is solved per request and retried on `40301 INVALID_POW_RESPONSE`. (#deepseek, pow.ts)
+- **DeepSeek Stream Finalize**: Streaming requests now finalize when the stream completes (not on response headers) so latency/tokens reflect the full stream; a synthetic OpenAI `finish_reason` chunk is emitted if upstream ends without one. (#deepseek, pipeline.ts/handler.ts)
+
+### Fixed
+- **Restore `context.txt` upload**: Large-context auto-upload to `context.txt` restored; anti-hallucination grounding rules added to the system prompt. (#qwen, session.ts/defaultSystemPrompt.ts/modelRouter.ts/qwenFileUpload.ts)
+- **`context.txt` clarified as non-local**: Models no longer attempt local-file tools on `context.txt`. (#qwen, defaultSystemPrompt.ts)
+- **Upstream 429 skips HTTP-level retry**: 429 errors skip HTTP retry so model fallback kicks in faster. (#retry, retry.ts)
+- **Streaming loop detection**: Loop detection + `pendingCorrections` added to the Qwen streaming pipeline. (#qwen, pipeline-stream.ts/defaultSystemPrompt.ts)
+- **Tool-loop corrections persist**: Correction prompts now survive account rotation and inline tool results. (#qwen, pipeline-nonstream.ts/session.ts)
+- **DeepSeek patch SSE chunks**: SSE chunks are now emitted for patch operations in streaming mode — fixes missing content in stream. (#deepseek, stream.ts)
+- **Message content arrays**: OpenAI-format message content arrays handled in DeepSeek and GLM prompts. (#deepseek/#glm, pipeline.ts)
+
 ### Changed
 - **GLM x-signature removed**: Confirmed `x-signature` header is NOT required by GLM API. Removed broken HMAC-SHA256 computation from `spoofing.ts`. The real gate is Aliyun Captcha (`FRONTEND_CAPTCHA_REQUIRED`), which is session-bound and requires browser context. (#glm, spoofing.ts)
 - **Account rotation for per-provider picking**: `isAvailable()` now checks the specific provider's token, not just Qwen. New `pickAccountForProvider(provider, excludeEmail?)` function. (#auth, accountManager.ts)

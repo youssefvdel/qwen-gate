@@ -10,7 +10,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-6.0-blue)](https://www.typescriptlang.org/)
 [![Browserless](https://img.shields.io/badge/Stack-Browserless-8B5CF6)](https://bun.sh)
 
-> **Disclaimer**: This project is for educational and study purposes. It provides access to Qwen models via `chat.qwen.ai` browser automation. Not affiliated with Alibaba Group or Qwen. Users must comply with `chat.qwen.ai`'s terms of service.
+> **Disclaimer**: This project is for educational and study purposes. It provides access to Qwen models via `chat.qwen.ai`, DeepSeek models via `chat.deepseek.com`, and GLM models via `chat.z.ai` browser automation. Not affiliated with Alibaba Group, Qwen, DeepSeek, or Zhipu AI. Users must comply with each provider's terms of service.
 
 ---
 
@@ -26,11 +26,12 @@ Then open [http://localhost:26405/dashboard](http://localhost:26405/dashboard) t
 
 ## Features
 
-- **Free Qwen Models** — Use Qwen 3.7-Max, Qwen 3-Max, Qwen 3-Plus, and more for free in your existing tools. Point Claude Code, OpenCode, Qwen Code, Cursor, or any OpenAI-compatible client at OpenGate and use Qwen models without paying per-token.
+- **Free Qwen Models** — Use Qwen 3.7-Max, Qwen 3-Max, Qwen 3-Plus, and more for free in your existing tools. Point Claude Code, OpenCode, Qwen Code, Cursor, Hermes, or any OpenAI-compatible client at OpenGate and use Qwen models without paying per-token.
+- **Free DeepSeek Models** — Instant, Expert (DeepThink/R1 reasoning), and Vision modes via `chat.deepseek.com`, including `deepseek-v4-flash` / `deepseek-v4-pro` aliases with 1M context. Reasoning enabled by default.
+- **Free GLM Models** — GLM-5.2, GLM-4.7, and more via `chat.z.ai`.
 - **OpenAI-Compatible API** — Drop-in replacement for `/v1/chat/completions` and `/v1/models`. Works with existing OpenAI SDKs, curl, or any HTTP client.
-- **Multi-Account Rotation** — Configure multiple Qwen accounts (3+ recommended). Requests are distributed via round-robin with automatic failover and cooldown tracking — cooldown limits become a non-issue.
-- **Session Pooling** — Browser sessions are pooled, reused, and autoscaled under load. No per-request login overhead.
-- **Tool Calling** — Full OpenAI-style function calling with JSON Schema validation and spam guards.
+- **Multi-Provider Accounts** — Configure multiple accounts for Qwen, DeepSeek, and GLM. Requests are distributed via round-robin with automatic failover and cooldown tracking — cooldown limits become a non-issue.
+- **Agentic Tool Calling** — Full OpenAI-style function calling with JSON Schema validation and spam guards. DeepSeek tool calling is *emulated* (the web API has no native function calling): tool schemas are injected with a strict JSON-array output contract and parsed from the model output — **parallel tool calls** (Hermes-style agents) work in both streaming and non-streaming modes.
 - **Streaming SSE** — Server-Sent Events with heartbeat keep-alive and content filter integrity maintained across stream boundaries.
 - **Content Filter Pipeline** — Strips thinking tags and filters internal artifacts from model output.
 - **Web Dashboard** — Real-time monitoring with 5 pages: overview, request log, account manager, network debug, and settings.
@@ -104,6 +105,10 @@ The server starts on [http://localhost:26405](http://localhost:26405).
 OpenGate works with any tool that speaks OpenAI's API: **Claude Code, OpenCode, Qwen Code, Cursor**, standard OpenAI SDKs (Python, Node.js, curl), and anything else using the `/v1/chat/completions` format — just point it at `http://localhost:26405/v1`.
 
 > **Tip:** Use `model: "qwen3-7-max"` for the latest Qwen model. Available models: `qwen3-7-max`, `qwen3-6-plus`, `qwen3-max`, `qwen3-coder`, `qwen3-5-plus`, `qwen3-5-flash`, and more.
+>
+> **DeepSeek:** `deepseek/deepseek-chat` (Instant), `deepseek/deepseek-reasoner` (Expert/DeepThink), `deepseek/deepseek-vision`, or the 1M-context `deepseek/deepseek-v4-flash` / `deepseek/deepseek-v4-pro` aliases. Bare names like `deepseek-v4-flash` (no `deepseek/` prefix) work too.
+>
+> **GLM:** `glm/glm-5.2`, `glm/glm-4.7`, `glm/glm-4.7-flash`, and more.
 
 ### Chat Completion
 
@@ -169,8 +174,12 @@ All settings in `config.json`. Key options:
 | `OPEN_DASHBOARD_ON_START` | `"false"`    | Auto-open dashboard in browser                  |
 | `RATE_LIMIT_COOLDOWN_MS`  | `"120000"`   | Cooldown after rate limit (2 min)               |
 | `RETRY_MAX_ATTEMPTS`      | `"3"`        | Max retry attempts                              |
+| `DEEPSEEK_THINKING`       | `"true"`     | Enable DeepSeek reasoning (thinking_enabled)    |
+| `STREAM_IDLE_TIMEOUT_MS`  | `"60000"`    | Idle timeout for upstream streams               |
+| `MODELS_CACHE_TTL_MS`     | `"3600000"`  | Model list cache TTL (ms)                       |
+| `CLAUDE_CODE_PROXY`       | `"false"`    | Claude Code proxy mode                          |
 
-> **Note:** This is a partial list of 10 commonly-used keys. See `ConfigSchema` in `src/services/configService.ts` for the full list.
+> **Note:** This is a partial list of commonly-used keys. See `ConfigSchema` in `src/services/configService.ts` for the full list.
 
 ## Architecture
 
@@ -251,77 +260,56 @@ src/
 ├── cli.ts                   CLI entry (opengate command parser)
 ├── cluster.ts               Multi-core cluster mode
 ├── index.tsx                Hono server, routing, CORS, auth
-├── models.json              Model definitions (context lengths, modalities)
 ├── routes/                  API route handlers
 │   ├── chat.ts              Chat completions dispatch
-│   ├── chatHelpers.ts       Chat request orchestration helpers
-│   ├── chatStreaming.ts     Streaming SSE logic
-│   ├── chatNonStreaming.ts  Non-streaming responses
 │   ├── chatHelpersCore.ts   Core chat response handling
-│   ├── chatStreamingHelpers.ts Streaming helper utilities
-│   ├── cleanupHelpers.ts    Cleanup logic
 │   ├── compressToolResult.ts Tool result compression
-│   ├── streamLoop.ts        Streaming loop with idle timeout
 │   ├── writeHelpers.ts      Write helper utilities
 │   ├── accounts.ts          Account CRUD API
 │   ├── config.ts            Config read/write API
+│   ├── providerRegistry.ts  Provider prefix → handler routing
+│   ├── openaiProxy.ts       OpenAI proxy passthrough
+│   ├── anthropic.ts         Anthropic-compatible endpoint
+│   ├── chat.ts              Qwen chat completions dispatch (via providers/qwen/)
+│   ├── providerGlm.ts / providerDeepSeek.ts  GLM/DeepSeek provider entry points
+│   ├── providers/           Per-provider implementations
+│   │   ├── qwen/            Qwen web chat (session, pipeline, stream)
+│   │   ├── glm/             GLM web chat (session, captcha, pipeline, stream)
+│   │   └── deepseek/        DeepSeek web chat
+│   │       ├── handler.ts   Retry loop + account rotation + telemetry
+│   │       ├── pipeline.ts  PoW → session → chat → SSE → OpenAI format
+│   │       ├── toolEmulation.ts  Agentic tool-call emulation (parallel calls)
+│   │       ├── pow.ts       WASM Proof-of-Work solver (single-use)
+│   │       ├── leim.ts      hif-leim WAF bypass token
+│   │       ├── stream.ts    JSON-patch SSE parser
+│   │       └── session.ts   Chat session management
+│   ├── modelSpecs.ts         Model spec definitions
 │   └── dashboard/           Web dashboard (vanilla HTML/JS)
-│       ├── accounts.ts      Account management page
 │       ├── dashboardRoutes.ts  Dashboard routing hub
-│       ├── logs.ts          Request log page
-│       ├── monitor.ts       Real-time monitoring page
-│       ├── network.ts       Network debug page
-│       ├── overview.ts      Dashboard overview/KPI page
-│       ├── settings.ts      Settings page
+│       ├── overview.ts / logs.ts / accounts.ts / network.ts / settings.ts
 │       ├── sidebar.ts       Sidebar navigation
-│       └── public/          Static dashboard assets (JS/CSS/SVG)
+│       └── public/          Static dashboard assets (JS/CSS)
 ├── services/                Business logic
 │   ├── accountManager.ts    Account CRUD, round-robin rotation
-│   ├── auth.test.ts         Auth test suite
-│   ├── auth.ts              Auth orchestration
-│   ├── browserlessFetch.ts  Browserless fetch transport
-│   ├── browserProfiles.ts   Browser profile management
-│   ├── bxTokenExtractor.ts  Browserless token extraction
-│   ├── bxUaGenerator.test.ts User-agent generator tests
-│   ├── bxUaGenerator.ts     User-agent generation
-│   ├── configService.test.ts Config service tests
-│   ├── configService.ts     Config loader
-│   ├── defaultSystemPrompt.ts Default system prompt
-│   ├── fireyejsRunner.ts    FireyeJS sandbox runner
-│   ├── logStore.test.ts     Log store tests
+│   ├── auth.ts              Auth orchestration + provider pool stats
+│   ├── configService.ts     Config loader (typed accessors)
 │   ├── logStore.ts          In-memory log store + SSE
-│   ├── loginHelpers.ts      Login helper utilities
-│   ├── loginService.ts      Login orchestration service
-│   ├── modelHealth.ts       Model health tracking
 │   ├── modelRouter.ts       Model routing & fallback
-│   ├── monitorStore.ts      Monitoring data store
-│   ├── networkDebug.ts      Outbound call capture
-│   ├── playwright.ts        Browser init & management
-│   ├── qwen.ts              Qwen API interaction
+│   ├── sessionPool.ts       Qwen session pool with autoscaling
+│   ├── qwen.ts / glmLogin.ts / deepseekLogin.ts   Provider login flows
+│   ├── browserProfiles.ts   Browser profile management
 │   ├── qwenFileUpload.ts    Qwen file upload handling
-│   ├── qwenLogger.ts        Qwen-specific logging
-│   ├── qwenModels.ts        Model fetching & mapping
-│   ├── sessionPool.ts       Session pool with autoscaling
-│   ├── systemLogger.ts      System-wide logger
-│   ├── tokenCache.ts        Token caching layer
-│   └── tokenRefresh.ts      Token refresh logic
-├── tools/                   Tool calling system
-│   ├── registry.ts          Tool registry
+│   ├── qwenModels.ts        Qwen model fetching & mapping
+│   ├── providerModelsService.ts  Provider model catalog service
+│   └── ...
+├── tools/                   Tool calling system (Qwen XML parsing)
 │   ├── xmlToolParser.ts     XML tool call parsing
-│   ├── guard.ts             Spam/abuse guard
-│   ├── schema.ts            JSON Schema validation
-│   └── schemaValidators.ts  Schema validation helpers
+│   └── guard.ts             Spam/abuse guard
 ├── utils/                   Shared utilities
-│   ├── auth.ts              Auth utilities
+│   ├── retry.ts             Exponential backoff (429-aware)
 │   ├── contentFilter.ts     Streaming content filter
-│   ├── paths.ts             Path utilities
-│   ├── retry.ts             Exponential backoff
-│   ├── tagNames.ts          Centralized tag names
-│   ├── thinkTagStripper.ts  Think tag stripping
 │   ├── tokenEstimator.ts    Token estimation
-│   ├── version.ts           Version information
-│   ├── xmlStripper.ts       XML/tool call artifact removal
-│   └── xmlStripper.test.ts  XML stripper tests
+│   └── providerModels.ts    Static DeepSeek/GLM model catalog + context specs
 ├── tests/                   Integration tests
 ├── types/                   TypeScript interfaces
 └── middleware/
@@ -344,6 +332,7 @@ Uses Bun's built-in test runner. Covers content filtering, tool-call parsing, st
 | [API Reference](docs/API.md)         | Full endpoint documentation                   |
 | [Deployment](docs/DEPLOYMENT.md)     | Production deployment guide                   |
 | [Development](docs/DEVELOPMENT.md)   | Contributing, testing, code conventions       |
+| [Release v0.7.2](docs/RELEASE-v0.7.2.md) | DeepSeek agentic tool-call emulation release notes |
 
 ## Star History
 
