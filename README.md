@@ -334,15 +334,6 @@ Uses Bun's built-in test runner. Covers content filtering, tool-call parsing, st
 | [Development](docs/DEVELOPMENT.md)   | Contributing, testing, code conventions       |
 | [Release v0.7.2](docs/RELEASE-v0.7.2.md) | DeepSeek agentic tool-call emulation release notes |
 
-## Star History
-
-<a href="https://www.star-history.com/?repos=youssefvdel%2Fopengate&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=youssefvdel/opengate&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=youssefvdel/opengate&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=youssefvdel/opengate&type=date&legend=top-left" />
- </picture>
-</a>
 
 ## License
 
