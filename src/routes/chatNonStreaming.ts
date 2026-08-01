@@ -202,12 +202,11 @@ function parseQwenResponse(line: string, state: StreamProcessorState, ctx: NonSt
     // so we must extract them here to avoid losing tool calls.
     const localToolCalls = extractLocalMcpToolCalls(chunk);
     if (localToolCalls.length > 0) {
-      const parsed = localToolCalls.map((tc) => ({
-        id: tc.id,
-        type: 'function' as const,
-        function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
-      }));
-      processToolCallsThroughGuard(parsed, state.toolCallsOut, {
+      // extractLocalMcpToolCalls returns flat ParsedToolCall {id,name,arguments}.
+      // processToolCallsThroughGuard validates that flat shape and wraps into
+      // {function:{name,arguments}} itself — pre-wrapping here hid tc.name from
+      // the guard (tc.name undefined), failing validation and dropping the call.
+      processToolCallsThroughGuard(localToolCalls, state.toolCallsOut, {
         logId: ctx.logId,
         toolSpamGuard: state.toolSpamGuard,
         correctionPrompts: state.correctionPrompts,

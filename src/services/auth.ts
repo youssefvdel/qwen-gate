@@ -26,6 +26,10 @@ import { loginFresh } from './loginService.ts';
 import { logStore } from './logStore.ts';
 import { getActivePage, getBrowser } from './playwright.ts';
 import { ensureAccountFresh, needsRefresh } from './tokenRefresh.ts';
+import { isBun } from '../utils/env.ts';
+
+/** Log the bun-pipe warning at most once per process. */
+let warnedBunPipe = false;
 
 export {
   addAccount,
@@ -235,6 +239,21 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
     }
 
     logStore.log('info', 'auth', `Loading token from profile for ${email}...`);
+    // cloakbrowser drives Chrome over --remote-debugging-pipe, which hangs under
+    // the Bun runtime on Windows (the launch never resolves -> 30s timeout ->
+    // fetch-login fallback with no baxia/WAF cookie harvest). Node drives the
+    // pipe correctly. Warn once so the operator can switch to `npm run start:node`
+    // when they want full WAF-cookie harvesting (silent-refresh, fewer captchas).
+    if (isBun && !warnedBunPipe) {
+      warnedBunPipe = true;
+      logStore.log(
+        'warn',
+        'auth',
+        'Running under Bun: browser profile launch may hang (CDP pipe). ' +
+          'For full baxia/WAF cookie harvesting run with `npm run start:node`. ' +
+          'Auth still works via fetch-login fallback.',
+      );
+    }
     const { BROWSER_DEFAULT_ARGS } = await import('./playwright.ts');
     const { launchPersistentContext } = await import('cloakbrowser');
     const PROFILE_LAUNCH_TIMEOUT_MS = 30_000;

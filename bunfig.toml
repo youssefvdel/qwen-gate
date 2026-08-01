@@ -1,0 +1,4 @@
+[test]
+# Redirect .qwen data writes to a temp dir before any test module loads,
+# so the suite never clobbers the real .qwen/accounts.json.
+preload = ["./src/tests/setup.ts"]

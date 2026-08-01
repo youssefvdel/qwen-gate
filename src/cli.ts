@@ -63,12 +63,18 @@ async function startServer(args: string[]) {
   if (hostIdx !== -1 && args[hostIdx + 1]) extraArgs.push('--host', args[hostIdx + 1]);
 
   const entry = findEntry();
-  const runner = 'bun';
+  // Run the server under Node, not Bun. cloakbrowser drives Chrome over a CDP
+  // pipe that hangs under Bun on Windows (browser-profile launch never resolves
+  // -> 30s timeout -> fetch-login with no baxia/WAF cookie harvest -> captchas).
+  // Node drives the pipe correctly and harvests the WAF cookies. `tsx` lets Node
+  // execute the .tsx entry directly.
+  const runner = 'node';
+  const runnerArgs = ['--import', 'tsx', entry, ...extraArgs];
 
-  out(`Starting server (bun ${entry})...`);
+  out(`Starting server (node ${entry})...`);
   if (extraArgs.length) out(`Extra args: ${extraArgs.join(' ')}`);
 
-  const server = spawn(runner, [entry, ...extraArgs], {
+  const server = spawn(runner, runnerArgs, {
     stdio: 'inherit',
     shell: true,
   });
