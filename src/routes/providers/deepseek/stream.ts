@@ -30,6 +30,13 @@ export interface DeepSeekStreamState {
   _responseMessageId: number | null;
   /** Current fragment type (RESPONSE, THINKING, etc.) */
   _fragmentType: string;
+  /**
+   * When true (tool-call emulation mode), the parser still accumulates
+   * content/thinking/usage into the state but emits NO output chunks — the
+   * pipeline decides at stream end whether to emit a synthesized tool_calls
+   * delta or flush the buffered content.
+   */
+  suppressOutput?: boolean;
 }
 
 export function createStreamState(): DeepSeekStreamState {
@@ -184,8 +191,17 @@ export function parseDeepSeekData(
   state: DeepSeekStreamState,
   model: string,
   sessionId: string,
+  promptTokens?: number,
 ): { chunks: string[]; done: boolean } {
   var chunks: string[] = [];
+  // Tool-call emulation mode (state.suppressOutput): keep accumulating
+  // content/thinking/usage into the state but emit no SSE chunks — the
+  // pipeline synthesizes the final output (tool_calls delta or flushed text).
+  // Exception: reasoning (THINKING) fragments still stream through so clients
+  // see live progress instead of dead air while the model composes its JSON.
+  const push = (chunk: string): void => {
+    if (!state.suppressOutput || chunk.includes('reasoning_content')) chunks.push(chunk);
+  };
 
   // Skip non-JSON lines
   if (!dataStr.startsWith('{')) {
@@ -200,14 +216,13 @@ export function parseDeepSeekData(
   }
 
   var ts = Math.floor(Date.now() / 1000);
-
   // Check for ready event data: { request_message_id, response_message_id, model_type }
   if (parsed.request_message_id !== undefined || parsed.model_type !== undefined) {
     state._responseMessageId = parsed.response_message_id || null;
     state.modelType = parsed.model_type || state.modelType;
 
     // Emit initial chunk with role: assistant
-    chunks.push(
+    push(
       'data: ' +
         JSON.stringify({
           id: sessionId,
@@ -241,7 +256,7 @@ export function parseDeepSeekData(
           state.thinkingContent += fragContent;
           state._fragmentType = 'THINKING';
           // Emit reasoning_content for thinking fragments
-          chunks.push(
+          push(
             'data: ' +
               JSON.stringify({
                 id: sessionId,
@@ -261,7 +276,7 @@ export function parseDeepSeekData(
         } else {
           state.content += fragContent;
           state._fragmentType = 'RESPONSE';
-          chunks.push(
+          push(
             'data: ' +
               JSON.stringify({
                 id: sessionId,
@@ -302,7 +317,7 @@ export function parseDeepSeekData(
 
     if (state._fragmentType === 'THINKING') {
       state.thinkingContent += contentDelta;
-      chunks.push(
+      push(
         'data: ' +
           JSON.stringify({
             id: sessionId,
@@ -321,7 +336,7 @@ export function parseDeepSeekData(
       );
     } else {
       state.content += contentDelta;
-      chunks.push(
+      push(
         'data: ' +
           JSON.stringify({
             id: sessionId,
@@ -346,7 +361,7 @@ export function parseDeepSeekData(
   // Handle inline content in data: {"content": "..."} (simpler format)
   if (parsed.content !== undefined && typeof parsed.content === 'string' && !parsed.v && !parsed.p) {
     state.content += parsed.content;
-    chunks.push(
+    push(
       'data: ' +
         JSON.stringify({
           id: sessionId,
@@ -369,7 +384,7 @@ export function parseDeepSeekData(
   // Handle patch operations: { p: path, o: op, v: value }
   if (parsed.p !== undefined) {
     const patchChunks = applyPatch(state, parsed.p, parsed.o || 'SET', parsed.v, sessionId, model, ts);
-    for (const c of patchChunks) chunks.push(c);
+    for (const c of patchChunks) push(c);
     return { chunks, done: state.isFinished };
   }
 
@@ -378,8 +393,10 @@ export function parseDeepSeekData(
   if (parsed.click_behavior !== undefined) {
     // event: close — mark as finished
     state.isFinished = true;
-    // Emit final finish
-    chunks.push(
+    // Emit final finish (carrying usage so OpenAI clients can show context usage)
+    const completionTokens = state.usage?.completion_tokens ?? Math.ceil((state.content.length + state.thinkingContent.length) / 4);
+    const prompt = promptTokens ?? 0;
+    push(
       'data: ' +
         JSON.stringify({
           id: sessionId,
@@ -393,6 +410,11 @@ export function parseDeepSeekData(
               finish_reason: 'stop',
             },
           ],
+          usage: {
+            prompt_tokens: prompt,
+            completion_tokens: completionTokens,
+            total_tokens: prompt + completionTokens,
+          },
         }) +
         '\n\n',
     );

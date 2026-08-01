@@ -2,11 +2,17 @@ import { existsSync, readFileSync } from 'fs';
 import { Hono } from 'hono';
 import { bearerAuth } from 'hono/bearer-auth';
 import { resolve } from 'path';
-import { getAccountCount, getAccountStats, getAllAccountEmails, getAvailableCount, initAuth } from '../../services/auth.ts';
+import {
+  getAccountCount,
+  getAccountStats,
+  getAllAccountEmails,
+  getAvailableCount,
+  getProviderPoolStats,
+  initAuth,
+} from '../../services/auth.ts';
 import { config, isValidKey } from '../../services/configService.ts';
 import { logStore } from '../../services/logStore.ts';
 import { monitorStore } from '../../services/monitorStore.ts';
-
 import { configureAccount, deleteAllChats } from '../../services/qwen.ts';
 import { sessionPool } from '../../services/sessionPool.ts';
 import { checkApiKeyAuth } from '../../utils/auth.ts';
@@ -441,7 +447,14 @@ export function registerDashboardRoutes(app: Hono): void {
     '/pool/stats',
     async (c, next) => requireApiKey(c, next),
     (c) => {
-      return c.json(sessionPool.getStats());
+      const qwen = sessionPool.getStats();
+      // Non-pool providers surface as pool-style stats (accounts with valid
+      // tokens / currently serving) so the Session Pool panel shows them too.
+      const deepseek = getProviderPoolStats('deepseek');
+      return c.json({
+        ...qwen,
+        providers: { qwen, deepseek },
+      });
     },
   );
 

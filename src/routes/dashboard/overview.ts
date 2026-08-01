@@ -47,6 +47,14 @@ ${sidebarHtml('overview')}
                 <div class="pool-stat"><div class="pool-stat-value" id="poolTotal">—</div><div class="pool-stat-label">Total</div></div>
               </div>
               <div class="pool-bar"><div class="pool-bar-fill" id="poolBarFill" style="width:0%"></div></div>
+              <div class="pool-provider-divider">DeepSeek</div>
+              <div class="pool-grid" id="poolDsGrid">
+                <div class="pool-stat"><div class="pool-stat-value" id="poolDsActive">—</div><div class="pool-stat-label">Active Requests</div></div>
+                <div class="pool-stat"><div class="pool-stat-value" id="poolDsWaiting">—</div><div class="pool-stat-label">Waiting</div></div>
+                <div class="pool-stat"><div class="pool-stat-value" id="poolDsAvailable">—</div><div class="pool-stat-label">Available</div></div>
+                <div class="pool-stat"><div class="pool-stat-value" id="poolDsTotal">—</div><div class="pool-stat-label">Accounts</div></div>
+              </div>
+              <div class="pool-bar"><div class="pool-bar-fill" id="poolDsBarFill" style="width:0%"></div></div>
             </div>
           </div>
         </div>

@@ -51,7 +51,7 @@ export async function getHifLeim(): Promise<string> {
     return value;
   } catch (err: any) {
     // If wreqFetch fails, try direct fetch as fallback
-    logStore.log('warn', 'deepseek-leim', 'wreqFetch failed, trying direct: ' + err.message);
+    logStore.log('warn', 'deepseek-leim', 'wreqFetch failed, trying direct: ' + (err instanceof Error ? err.message : String(err)));
   }
 
   // Direct fetch fallback (used by standalone test, works in Node/Bun)

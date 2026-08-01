@@ -74,6 +74,10 @@ export interface LogEntry {
     /** Total estimated tokens sent to Qwen (clientTokens + overheadTokens) */
     estimatedTotalTokens?: number;
   };
+  promptToDeepSeek?: {
+    totalLength: number;
+    preview: string;
+  };
   qwenRawChunks: string[];
   rawFullContent: string;
   parsedToolCalls: Array<{ name: string; args: string }>;
@@ -369,6 +373,7 @@ export class RequestLogStore extends SystemLogger {
         finish_reason: entry.finalResponse?.finishReason || null,
         stream: entry.stream,
         latency_ms: entry.latency_ms,
+        prompt_to_deepseek: entry.promptToDeepSeek || null,
         thinking_content: entry.reasoningContent || '',
         raw_output: entry.rawFullContent || '',
         proccessed_output: entry.processedApiOutput || '',

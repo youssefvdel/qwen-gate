@@ -59,6 +59,18 @@ async function refreshPool() {
   var bar = document.getElementById('poolBarFill');
   bar.style.width = pct + '%';
   bar.style.background = pct > 80 ? 'var(--danger)' : pct > 50 ? 'var(--warning)' : 'var(--accent)';
+  // Non-pool providers (deepseek) surface as pool-style stats
+  var ds = data.providers && data.providers.deepseek;
+  if (ds) {
+    setText('poolDsActive', ds.inUse || 0);
+    setText('poolDsWaiting', ds.waiting || 0);
+    setText('poolDsAvailable', ds.available || 0);
+    setText('poolDsTotal', ds.total || 0);
+    var dsPct = ds.total > 0 ? Math.min(100, Math.round(((ds.inUse || 0) / ds.total) * 100)) : 0;
+    var dsBar = document.getElementById('poolDsBarFill');
+    dsBar.style.width = dsPct + '%';
+    dsBar.style.background = dsPct > 80 ? 'var(--danger)' : dsPct > 50 ? 'var(--warning)' : 'var(--accent)';
+  }
 }
 /* ── Model Health ── */
 async function refreshModelHealth() {

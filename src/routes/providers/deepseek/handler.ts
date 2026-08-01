@@ -20,14 +20,35 @@ export async function deepseekHandler(c: Context, body: OpenAIRequest): Promise<
   let lastFailedEmail: string | undefined;
   let lastError: unknown;
 
+  const startTs = Date.now();
   const logId = crypto.randomUUID();
   logStore.createEntry(logId, body.model, isStream);
   logStore.updateEntry(logId, (entry) => {
     entry.apiType = 'openai';
   });
 
+  // Client request logging (mirrors the Qwen handler so the dashboard log
+  // detail view and .logs/*.json files show real request data for deepseek).
+  const msgs = body.messages || [];
+  const rawLast = msgs.length > 0 ? msgs[msgs.length - 1].content : '';
+  const lastMsg = typeof rawLast === 'string' ? rawLast : rawLast !== undefined ? JSON.stringify(rawLast) : '';
+  logStore.updateEntry(logId, (entry) => {
+    entry.clientRequest = {
+      messageCount: msgs.length,
+      roles: msgs.map((m: any) => m.role),
+      hasTools: !!body.tools?.length,
+      toolNames: body.tools?.map((t: any) => t.function?.name || t.name) || [],
+      tool_choice: body.tool_choice ? (typeof body.tool_choice === 'string' ? body.tool_choice : JSON.stringify(body.tool_choice)) : null,
+      lastMessage: lastMsg.substring(0, 300),
+      messages: msgs.map((m: any) => ({
+        role: m.role,
+        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+      })),
+    };
+  });
+
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const { pickAccountForProvider, decrementInFlight } = await import('../../../services/auth.ts');
+    const { pickAccountForProvider, decrementInFlight, incrementTotalRequests } = await import('../../../services/auth.ts');
     const acct = await pickAccountForProvider('deepseek', lastFailedEmail);
     const email = acct?.email || '';
 
@@ -72,6 +93,15 @@ export async function deepseekHandler(c: Context, body: OpenAIRequest): Promise<
       continue;
     }
 
+    // Account telemetry — feeds the dashboard KPIs (total requests), the
+    // per-account stats on the providers page, and the monitor store.
+    // NOTE: pickAccountForProvider already incremented inFlight — do NOT
+    // increment again here or the counter leaks +1 per request.
+    incrementTotalRequests(email);
+    logStore.updateEntry(logId, (entry) => {
+      entry.accountEmail = email;
+    });
+
     try {
       const { proxyViaDeepSeekWebChat } = await import('./pipeline.ts');
       const result = await proxyViaDeepSeekWebChat(c, body, email, bearerToken, model, isStream, logId);
@@ -81,7 +111,13 @@ export async function deepseekHandler(c: Context, body: OpenAIRequest): Promise<
       // is a load-balancing heuristic, so slight over-counting is harmless
       // (safety valve at 20, auto-correction on next request from same account).
       decrementInFlight(email);
-      logStore.finalizeRequest(logId);
+      logStore.recordModelSuccess(body.model);
+      if (!isStream) {
+        // Streaming requests are finalized by the pipeline when the stream
+        // completes (so latency/tokens reflect the full stream, not just the
+        // response header). Non-stream responses are complete here.
+        logStore.finalizeRequest(logId, { latencyMs: Date.now() - startTs });
+      }
       return result;
     } catch (err: any) {
       // Decrement inFlight since we're failing this account
@@ -126,15 +162,17 @@ export async function deepseekHandler(c: Context, body: OpenAIRequest): Promise<
 
       // Non-retryable — propagate immediately
       logStore.log('error', 'deepseek-handler', `Non-retryable error on ${email}: ${errMsg}`);
+      logStore.recordModelError(body.model);
       logStore.addError(logId, errMsg);
-      logStore.finalizeRequest(logId);
+      logStore.finalizeRequest(logId, { latencyMs: Date.now() - startTs, finishReason: 'error' });
       throw err;
     }
   }
 
   const exhaustedErr = lastError instanceof Error ? lastError.message : 'DeepSeek request failed after retries';
+  logStore.recordModelError(body.model);
   logStore.addError(logId, exhaustedErr);
-  logStore.finalizeRequest(logId);
+  logStore.finalizeRequest(logId, { latencyMs: Date.now() - startTs, finishReason: 'error' });
   return c.json(
     {
       error: {

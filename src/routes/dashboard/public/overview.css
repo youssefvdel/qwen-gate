@@ -218,6 +218,16 @@ tbody tr:hover {
   border-radius: 2px;
   transition: width 0.5s ease;
 }
+.pool-provider-divider {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border, rgba(128, 128, 128, 0.2));
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
 .sys-log-entry {
   display: flex;
   gap: 10px;

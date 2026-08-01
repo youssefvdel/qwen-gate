@@ -5,28 +5,25 @@
  * Login is in loginService.ts. Login helpers are in loginHelpers.ts.
  */
 
-import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { existsSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { Cookie } from 'playwright';
-import type { AccountEntry, AuthState } from '../types/auth.ts';
+import type { AuthState } from '../types/auth.ts';
 import {
   accounts,
   decodeJwt,
   discoverSavedAccounts,
   enableHotReload as enableHotReloadImpl,
   getAccountByEmail,
+  getAllAccountEmails,
   loadAccountsFromFile,
   migrateFromOldPaths,
-  pickAccountForProvider,
   rebuildEmailIndex,
-  resetWatcherState,
   setupAccountWatcher as setupAccountWatcherImpl,
 } from './accountManager.ts';
 import { config } from './configService.ts';
-import { loginFresh } from './loginService.ts';
 import { logStore } from './logStore.ts';
-import { getActivePage, getBrowser } from './playwright.ts';
-import { ensureAccountFresh, needsRefresh } from './tokenRefresh.ts';
+import { getActivePage } from './playwright.ts';
 
 export {
   addAccount,
@@ -57,6 +54,27 @@ export {
   throttleAccount,
 } from './accountManager.ts';
 export { ensureAccountFresh, needsRefresh, tryRefreshToken } from './tokenRefresh.ts';
+
+/**
+ * Pool-style stats for a non-pool provider (deepseek, glm, ...). These providers
+ * serve requests directly from account tokens instead of pre-created sessions, so
+ * the closest pool equivalent is:
+ *   total     — accounts with a valid token for this provider
+ *   inUse     — accounts currently serving a request (inFlight counter)
+ *   available — accounts with a token not currently in flight
+ *   waiting   — always 0 (requests pick any account immediately, no queue)
+ */
+export function getProviderPoolStats(provider: string): { total: number; available: number; inUse: number; waiting: number } {
+  let total = 0;
+  let inUse = 0;
+  for (const email of getAllAccountEmails()) {
+    const acct = getAccountByEmail(email);
+    if (!acct?.providerStates?.[provider]?.token) continue;
+    total++;
+    inUse += acct.inFlight ?? 0;
+  }
+  return { total, available: Math.max(0, total - inUse), inUse, waiting: 0 };
+}
 
 export function getAuthTokenMaxAgeMs(): number {
   return config.getInt('AUTH_TOKEN_MAX_AGE_MS', 28800000);

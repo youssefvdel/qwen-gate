@@ -38,12 +38,23 @@ export function registerProvider(prefix: string, handler: ProviderHandler): void
 /**
  * Find the registered provider for a model name, or null if no match.
  * Checks prefixes in longest-first order for correctness with nested prefixes.
+ * Also accepts bare provider names with `-`/`_` separators (e.g. `deepseek-v4-flash`
+ * or `deepseek_v4_flash`) so unprefixed DeepSeek model names don't fall through
+ * to the default Qwen provider.
  */
 export function providerForModel(model: string): { prefix: string; handler: ProviderHandler } | null {
   // Check longest prefix first to avoid partial matches
   const sortedPrefixes = [...providers.keys()].sort((a, b) => b.length - a.length);
   for (const prefix of sortedPrefixes) {
     if (model.startsWith(prefix)) {
+      const handler = providers.get(prefix);
+      if (handler) return { prefix, handler };
+    }
+  }
+  // Bare-name fallback: `deepseek-*` / `deepseek_*` (no slash) → deepseek provider
+  for (const prefix of sortedPrefixes) {
+    const bare = prefix.slice(0, -1); // 'deepseek', 'glm', 'qwen'
+    if (model === bare || model.startsWith(bare + '-') || model.startsWith(bare + '_')) {
       const handler = providers.get(prefix);
       if (handler) return { prefix, handler };
     }

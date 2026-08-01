@@ -10,7 +10,6 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { logStore } from '../../../services/logStore.ts';
 import { DEEPSEEK_BASE_URL } from './spoofing.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -53,7 +52,7 @@ function getWasm(): Record<string, any> {
   if (typeof e.__wbindgen_start === 'function') {
     try {
       e.__wbindgen_start();
-    } catch (_) {
+    } catch {
       /* wasm init noise */
     }
   }
@@ -100,14 +99,6 @@ function buildPowHeader(challenge: PowChallenge, answer: number): string {
   ).toString('base64');
 }
 
-// ── Cache (per-key: email:target_path) ──
-
-interface PowCacheEntry {
-  header: string;
-  expiresAt: number;
-}
-const powResponseCache = new Map<string, PowCacheEntry>();
-
 // ── API ──
 
 /**
@@ -147,27 +138,19 @@ async function getPowChallenge(bearerToken: string, targetPath = '/api/v0/chat/c
 
 /**
  * Get a PoW response header (base64-encoded solution JSON).
- * Cached per (email, target_path) up to the challenge's expire_after.
+ *
+ * NOTE: DeepSeek PoW solutions are SINGLE-USE — each solution is accepted by
+ * the chat/completion endpoint exactly once (reuse returns 40301
+ * INVALID_POW_RESPONSE). Caching a solved header and reusing it within the
+ * challenge's expire window makes every request after the first fail, so we
+ * always solve fresh here. This mirrors the official web client, which
+ * prefetches exactly one PoW per completion request (pow_prefetch_count: 1).
  * Throws on failure — caller should catch and retry.
  */
 export async function getPowResponseHeader(email: string, bearerToken: string, targetPath = '/api/v0/chat/completion'): Promise<string> {
-  const cacheKey = email + ':' + targetPath;
-  const cached = powResponseCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.header;
-  }
-
-  const challenge = await getPowChallenge(bearerToken, targetPath);
-  logStore.log('debug', 'deepseek-pow', `Challenge: difficulty=${challenge.difficulty} algorithm=${challenge.algorithm}`);
-
-  const answer = solveWasm(challenge);
-  const header = buildPowHeader(challenge, answer);
-  logStore.log('debug', 'deepseek-pow', `Solved: answer=${answer} header_len=${header.length}`);
-
-  const ttl = Math.min(challenge.expire_after || 120_000, 120_000);
-  powResponseCache.set(cacheKey, { header, expiresAt: Date.now() + ttl });
-
-  return header;
+  // email is unused now (cache removed) but kept for call-site compatibility.
+  void email;
+  return solvePowInline(bearerToken, targetPath);
 }
 
 /**

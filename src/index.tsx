@@ -19,7 +19,21 @@ import { configureAccount, fetchQwenModels } from './services/qwen.ts';
 import { safeCompare } from './utils/auth.ts';
 import { isBun } from './utils/env.ts';
 import { projectPath } from './utils/paths.ts';
-import { PROVIDER_MODELS } from './utils/providerModels.ts';
+import { PROVIDER_MODEL_SPECS, PROVIDER_MODELS } from './utils/providerModels.ts';
+
+// Attach context_window / max_output_tokens / modalities to provider model
+// entries so OpenAI clients (Hermes, etc.) get accurate metadata instead of
+// falling back to their own (possibly stale) model databases.
+function attachProviderSpecs(m: any): any {
+  const spec = PROVIDER_MODEL_SPECS[m.id as string];
+  if (!spec) return m;
+  return {
+    ...m,
+    context_window: spec.max_context,
+    max_output_tokens: spec.max_output,
+    modalities: spec.modalities,
+  };
+}
 
 process.title = 'opengate';
 
@@ -233,13 +247,13 @@ app.get(
       const allModels = [...qwenModels, ...deepseekModels, ...glmModels, ...PROVIDER_MODELS];
       return c.json({
         object: 'list',
-        data: allModels,
+        data: allModels.map(attachProviderSpecs),
       });
-    } catch (err: any) {
+    } catch {
       // If any fetch fails, still return provider models
       return c.json({
         object: 'list',
-        data: PROVIDER_MODELS,
+        data: PROVIDER_MODELS.map(attachProviderSpecs),
       });
     }
   },
