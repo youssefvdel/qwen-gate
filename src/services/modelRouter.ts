@@ -83,13 +83,43 @@ const FALLBACK_CHAINS: Record<string, FallbackChain> = {
 
   // ── Dot-format aliases (for clients that use dots vs dashes) ──
   // NOTE: primaries MUST use dot format (matching the key) — Qwen's API expects dot-separated model names
-  'qwen3.6-plus': { primary: 'qwen3.6-plus', fallbacks: [{ model: 'qwen3.5-plus', weight: 0.8, health_threshold: 0.9 }, { model: 'qwen3.5-flash', weight: 0.5, health_threshold: 0.8 }] },
-  'qwen3.7-max': { primary: 'qwen3.7-max', fallbacks: [{ model: 'qwen3.6-plus', weight: 0.9, health_threshold: 0.9 }, { model: 'qwen3.5-plus', weight: 0.6, health_threshold: 0.8 }] },
-  'qwen3.6-max-preview': { primary: 'qwen3.6-max-preview', fallbacks: [{ model: 'qwen3.5-max-preview', weight: 0.85, health_threshold: 0.9 }] },
+  'qwen3.6-plus': {
+    primary: 'qwen3.6-plus',
+    fallbacks: [
+      { model: 'qwen3.5-plus', weight: 0.8, health_threshold: 0.9 },
+      { model: 'qwen3.5-flash', weight: 0.5, health_threshold: 0.8 },
+    ],
+  },
+  'qwen3.7-max': {
+    primary: 'qwen3.7-max',
+    fallbacks: [
+      { model: 'qwen3.6-plus', weight: 0.9, health_threshold: 0.9 },
+      { model: 'qwen3.5-plus', weight: 0.6, health_threshold: 0.8 },
+    ],
+  },
+  'qwen3.6-max-preview': {
+    primary: 'qwen3.6-max-preview',
+    fallbacks: [{ model: 'qwen3.5-max-preview', weight: 0.85, health_threshold: 0.9 }],
+  },
   'qwen3.6-27b': { primary: 'qwen3.6-27b', fallbacks: [{ model: 'qwen3.5-27b', weight: 0.9, health_threshold: 0.9 }] },
-  'qwen3.7-max-preview': { primary: 'qwen3.7-max-preview', fallbacks: [{ model: 'qwen3.6-plus-preview', weight: 0.8, health_threshold: 0.9 }] },
-  'qwen3.7-plus': { primary: 'qwen3.7-plus', fallbacks: [{ model: 'qwen3.6-plus', weight: 0.9, health_threshold: 0.9 }, { model: 'qwen3.5-plus', weight: 0.6, health_threshold: 0.8 }] },
-  'qwen3.7-plus-preview': { primary: 'qwen3.7-plus-preview', fallbacks: [{ model: 'qwen3.6-plus', weight: 0.85, health_threshold: 0.9 }, { model: 'qwen3.5-plus', weight: 0.6, health_threshold: 0.8 }] },
+  'qwen3.7-max-preview': {
+    primary: 'qwen3.7-max-preview',
+    fallbacks: [{ model: 'qwen3.6-plus-preview', weight: 0.8, health_threshold: 0.9 }],
+  },
+  'qwen3.7-plus': {
+    primary: 'qwen3.7-plus',
+    fallbacks: [
+      { model: 'qwen3.6-plus', weight: 0.9, health_threshold: 0.9 },
+      { model: 'qwen3.5-plus', weight: 0.6, health_threshold: 0.8 },
+    ],
+  },
+  'qwen3.7-plus-preview': {
+    primary: 'qwen3.7-plus-preview',
+    fallbacks: [
+      { model: 'qwen3.6-plus', weight: 0.85, health_threshold: 0.9 },
+      { model: 'qwen3.5-plus', weight: 0.6, health_threshold: 0.8 },
+    ],
+  },
   'qwen3.5-plus': { primary: 'qwen3.5-plus', fallbacks: [{ model: 'qwen3.5-flash', weight: 0.7, health_threshold: 0.85 }] },
   'qwen3.5-omni-plus': { primary: 'qwen3.5-omni-plus', fallbacks: [{ model: 'qwen3.5-omni-flash', weight: 0.8, health_threshold: 0.9 }] },
   'qwen3.6-35b-a3b': { primary: 'qwen3.6-35b-a3b', fallbacks: [{ model: 'qwen3.5-397b-a17b', weight: 0.75, health_threshold: 0.85 }] },
