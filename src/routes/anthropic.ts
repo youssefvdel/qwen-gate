@@ -11,6 +11,7 @@ import { uploadImageAsFile, uploadLargeTextAsFile } from '../services/qwenFileUp
 import { sessionPool } from '../services/sessionPool.ts';
 import { cleanTextOfXmlArtifacts, parseXmlToolCalls, xmlToolCallToParsed } from '../tools/xmlToolParser.ts';
 import type { OpenAIRequest, ParsedToolCall } from '../types/openai.ts';
+import { resolveThinkingLevel } from '../utils/thinkingLevel.ts';
 import { checkContextWindow, estimateTokens } from '../utils/tokenEstimator.ts';
 import {
   acquireSessionWithCorrections,
@@ -27,22 +28,23 @@ import { extractLocalMcpToolCalls } from './chatStreamingHelpers.ts';
 // ── Anthropic → Qwen model map ─────────────────────────────────────
 
 // ponytail: use dotted model names matching the Qwen API (/v1/models response).
-// models.json keys use dashes (qwen3-7-max) but Qwen API expects dots (qwen3.7-max).
-const ANTHROPIC_TO_QWEN: Record<string, string> = {
-  'claude-sonnet-4-20250514': 'qwen3.7-max',
-  'claude-sonnet-4-20241022': 'qwen3.6-plus',
-  'claude-3-5-sonnet-20241022': 'qwen3.6-plus',
-  'claude-opus-4-20250514': 'qwen3.7-max',
-  'claude-opus-4-8': 'qwen3.7-max',
-  'claude-sonnet-4-8': 'qwen3.7-max',
-  'claude-3-opus-20240229': 'qwen3.7-max',
-  'claude-sonnet-4-6-20250514': 'qwen3.7-max',
-  'claude-3-haiku-20240307': 'qwen3.5-flash',
-};
-const DEFAULT_QWEN_MODEL = 'qwen3.7-max';
+// Routing matches the family keyword anywhere in the name so both current
+// (claude-sonnet-4-…) and legacy (claude-3-5-sonnet-20241022) spellings work:
+//   Opus   → qwen3.8-max  (flagship)
+//   Sonnet → qwen3.7-max  (workhorse)
+//   Haiku  → qwen3.7-plus (fast/vision)
+const QWEN_MODEL_BY_TIER: Array<[pattern: RegExp, model: string]> = [
+  [/\bopus\b/i, 'qwen3.8-max'],
+  [/\bsonnet\b/i, 'qwen3.7-max'],
+  [/\bhaiku\b/i, 'qwen3.7-plus'],
+];
+const DEFAULT_QWEN_MODEL = 'qwen3.8-max';
 
 function mapModel(anthropicModel: string): string {
-  return ANTHROPIC_TO_QWEN[anthropicModel] || DEFAULT_QWEN_MODEL;
+  for (const [pattern, model] of QWEN_MODEL_BY_TIER) {
+    if (pattern.test(anthropicModel)) return model;
+  }
+  return DEFAULT_QWEN_MODEL;
 }
 
 // ── Request conversion ─────────────────────────────────────────────
@@ -307,11 +309,7 @@ async function setupAnthropicSession(
     });
   }
 
-  const {
-    qwenMessages: processedMessages,
-    systemContent,
-    toolResultsContent,
-  } = buildQwenMessages(cleanedMessages, body, availableTokens, toolCalling);
+  const { qwenMessages: processedMessages, toolResultsContent } = buildQwenMessages(cleanedMessages, body, availableTokens, toolCalling);
 
   const MAX_INLINE_CHARS = 50000;
   let inlineContent = processedMessages[0].content as string;
@@ -335,7 +333,7 @@ async function setupAnthropicSession(
   }
 
   let lastFailedEmail: string | undefined;
-  const isThinkingModel = !body.model.includes('no-thinking');
+  const isThinkingModel = body.thinkingLevel !== 'off' && !body.model.includes('no-thinking');
   let lastError: any;
 
   for (let attempt = 0; attempt < MAX_ACCOUNT_RETRIES; attempt++) {
@@ -375,9 +373,11 @@ async function setupAnthropicSession(
       }
     }
 
-    if (accountEmail && (systemContent || toolResultsContent || chatHistoryContent)) {
+    if (accountEmail && (toolResultsContent || chatHistoryContent)) {
       const parts: string[] = [];
-      if (systemContent) parts.push(`<system-instructions>\n${systemContent}\n</system-instructions>`);
+      parts.push(
+        `<REFERENCE_CONTEXT>\nThe following are older tool results and chat history from this conversation.\nThey are background reference — the actual current request appears inline above.\nRead them only if you need details not present inline.\n</REFERENCE_CONTEXT>`,
+      );
       if (toolResultsContent) parts.push(`<tool-results>\n${toolResultsContent}\n</tool-results>`);
       if (chatHistoryContent) parts.push(`<chat_history>\n${chatHistoryContent}\n</chat_history>`);
       try {
@@ -1047,6 +1047,17 @@ export async function anthropicMessages(c: Context) {
     // Map model
     const mappedModel = mapModel(anthropicModel);
 
+    // Resolve thinking level from Claude Code's `thinking` block (budget_tokens)
+    // + THINKING_MODE config. Levels: off / summary / full.
+    const thinkingLevel = resolveThinkingLevel({
+      mode: config.get('THINKING_MODE', 'auto'),
+      model: mappedModel,
+      intent: rawBody.thinking ? { ...rawBody.thinking } : undefined,
+    });
+    if (rawBody.thinking) {
+      logStore.log('debug', 'chat', `[Anthropic] thinking=${JSON.stringify(rawBody.thinking)} → level=${thinkingLevel}`);
+    }
+
     // Convert messages and tools to OpenAI format
     const openaiMessages = anthropicMessagesToOpenAI(messages, system);
     const convertedTools = anthropicToolsToOpenAI(tools);
@@ -1056,6 +1067,7 @@ export async function anthropicMessages(c: Context) {
       model: mappedModel,
       messages: openaiMessages,
       stream: false,
+      thinkingLevel,
       ...(convertedTools.length > 0 && { tools: convertedTools }),
       ...(toolChoice && { tool_choice: toolChoice }),
     };

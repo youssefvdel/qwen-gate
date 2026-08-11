@@ -30,6 +30,11 @@ export interface ConfigSchema {
   MODELS_CACHE_TTL_MS: string;
   DARK_MODE: string;
   CLAUDE_CODE_PROXY: string;
+  THINKING_MODE: string;
+  FAST_TRANSPORT: string;
+  SESSION_POOL_SIZE: string;
+  SESSION_POOL_IDLE_TTL_MS: string;
+  LOCAL_MCP_MAX_CHARS: string;
 }
 
 export const DEFAULT_CONFIG: ConfigSchema = {
@@ -59,6 +64,11 @@ export const DEFAULT_CONFIG: ConfigSchema = {
   MODELS_CACHE_TTL_MS: '3600000',
   DARK_MODE: 'false',
   CLAUDE_CODE_PROXY: 'false',
+  THINKING_MODE: 'auto',
+  FAST_TRANSPORT: 'true',
+  SESSION_POOL_SIZE: '2',
+  SESSION_POOL_IDLE_TTL_MS: '600000',
+  LOCAL_MCP_MAX_CHARS: '70000',
 };
 
 const CONFIG_KEYS = new Set<string>(Object.keys(DEFAULT_CONFIG));
@@ -212,11 +222,13 @@ export function updateClaudeCodeSettings(cfg: ConfigSchema): void {
     const host = cfg.HOST || 'localhost';
     const port = cfg.PORT || '26405';
     const baseUrl = `http://${host}:${port}`;
+    // Use the configured API key so Claude Code authenticates correctly.
+    const authToken = cfg.API_KEY || 'unused';
     const settings = {
       _comment: 'Managed by qwen-gate — CLAUDE_CODE_PROXY toggle in dashboard',
       env: {
         ANTHROPIC_BASE_URL: baseUrl,
-        ANTHROPIC_AUTH_TOKEN: 'unused',
+        ANTHROPIC_AUTH_TOKEN: authToken,
       },
     };
     try {

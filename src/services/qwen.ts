@@ -15,15 +15,17 @@ export const QWEN_API_BASE = 'https://chat.qwen.ai';
 export const QWEN_CHAT_COMPLETIONS_URL = `${QWEN_API_BASE}/api/v2/chat/completions`;
 export const QWEN_SETTINGS_URL = `${QWEN_API_BASE}/api/v2/users/user/settings/update`;
 
+export type ThinkingFormat = 'summary' | 'full';
+
 /** Build shared feature_config for Qwen message payloads. */
-export function buildFeatureConfig(_enableThinking: boolean): Record<string, any> {
+export function buildFeatureConfig(enableThinking: boolean, thinkingFormat: ThinkingFormat = 'summary'): Record<string, any> {
   return {
-    thinking_enabled: true,
+    thinking_enabled: enableThinking,
     output_schema: 'phase',
     research_mode: 'normal',
     auto_thinking: false,
     thinking_mode: 'Thinking',
-    thinking_format: 'summary',
+    thinking_format: thinkingFormat,
     auto_search: true,
   };
 }
@@ -391,6 +393,7 @@ export async function createQwenStream(
       body: bodyStr,
       accountEmail: currentAccountEmail,
       stream: true, // keep session alive for streaming via impers worker
+      transport: config.getBool('FAST_TRANSPORT', true) ? 'plain' : 'wreq',
     });
     logStore.log(
       'debug',

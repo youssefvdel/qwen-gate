@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import modelSpecs from '../models.json' with { type: 'json' };
+import { config } from '../services/configService.ts';
+import { logStore } from '../services/logStore.ts';
 import { modelRouter } from '../services/modelRouter.ts';
 import { buildFeatureConfig, createQwenStream } from '../services/qwen.ts';
 import { sessionPool } from '../services/sessionPool.ts';
@@ -95,7 +97,17 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
         .replace(CONTROL_CHAR_RE, '')
         .trim();
 
-      if (sanitized.length === 0) continue;
+      if (sanitized.length === 0) {
+        // The user turn contained ONLY <system-reminder> blocks (e.g. Claude Code
+        // SessionStart hook / superpowers sync). Dropping it leaves Qwen with a
+        // system-only prompt and no user content, which makes it return an empty
+        // end_turn — causing Claude Code to churn forever without answering.
+        // Keep the reminders as the user turn instead.
+        if (sysReminders.length > 0) {
+          segments.push(`<user>\n${sysReminders.join('\n\n')}\n</user>`);
+        }
+        continue;
+      }
 
       const charLimit = Math.floor(availableTokens * 3.0);
       const truncated =
@@ -163,10 +175,26 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
     }
   }
 
-  // Single user message with all history wrapped in <user>/<assist> tags
+  // Single user message with all history wrapped in <user>/<assist> tags.
+  // System instructions MUST stay inline (at the top) — previously they were
+  // sent only to the uploaded context.txt file, which made the model focus on
+  // the file ("context.txt contains only instructions") instead of answering,
+  // often returning an empty end_turn. Keeping them inline fixes that.
   let prompt = segments.length > 0 ? segments.join('\n\n') : '';
+  const inlineSystem = systemParts
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .join('\n\n');
+  if (inlineSystem) {
+    prompt = `<system>\n${inlineSystem}\n</system>\n\n${prompt}`;
+  }
 
-  const featureConfig = buildFeatureConfig(true);
+  // Thinking level is resolved by the route handlers (Anthropic / OpenAI)
+  // from the client's thinking intent + THINKING_MODE config, then attached
+  // to body.thinkingLevel. Fall back to the -no-thinking model suffix.
+  const thinkingLevel: 'off' | 'summary' | 'full' =
+    (body.thinkingLevel as 'off' | 'summary' | 'full' | undefined) || (body.model.includes('-no-thinking') ? 'off' : 'summary');
+  const featureConfig = buildFeatureConfig(thinkingLevel !== 'off', thinkingLevel === 'full' ? 'full' : 'summary');
 
   if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
     const localMcp: Record<string, any> = {};
@@ -180,14 +208,49 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
       };
       toolNames.push(`${fn.name}${fn.description ? ` (${fn.description})` : ''}`);
     }
+    // Qwen silently returns an EMPTY completion when feature_config.local_mcp
+    // (the tool definitions) is too large (~>127KB serialized). Claude Code
+    // ships huge tool descriptions (Bash ~10KB, Workflow ~19KB) that with 60+
+    // tools blow past the limit and produce zero output. Shrink the longest
+    // descriptions until the whole local_mcp fits in the budget.
+    const mcpBudget = config.getInt('LOCAL_MCP_MAX_CHARS', 115000);
+    let mcpJson = JSON.stringify(localMcp);
+    if (mcpJson.length > mcpBudget) {
+      let shrunk = true;
+      let guard = 0;
+      while (mcpJson.length > mcpBudget && shrunk && guard < 200) {
+        shrunk = false;
+        let longestName: string | null = null;
+        let longestLen = 0;
+        for (const [name, def] of Object.entries(localMcp['★'])) {
+          const dl = ((def as { description?: string }).description || '').length;
+          if (dl > longestLen) {
+            longestLen = dl;
+            longestName = name;
+          }
+        }
+        if (longestName && longestLen > 40) {
+          const target = Math.floor(longestLen / 2);
+          const cur = localMcp['★'][longestName] as { description?: string };
+          cur.description = (cur.description || '').slice(0, Math.max(40, target));
+          shrunk = true;
+          guard++;
+          mcpJson = JSON.stringify(localMcp);
+        }
+      }
+      if (mcpJson.length > mcpBudget) {
+        logStore.log('warn', 'chat', `[Tools] local_mcp still ${mcpJson.length}B after shrinking — trimmed below budget ${mcpBudget}`);
+      } else {
+        logStore.log('debug', 'chat', `[Tools] local_mcp shrunk to ${mcpJson.length}B (budget ${mcpBudget}B)`);
+      }
+    }
     featureConfig.local_mcp = localMcp;
     // ponytail: tool schema in system prompt as textual fallback for models
     // that don't honor feature_config.local_mcp consistently
-    const toolDescriptions = body.tools
-      .map((t: any) => {
-        const fn = t.function || {};
-        const params = fn.parameters?.properties ? Object.keys(fn.parameters.properties).join(', ') : '';
-        return `- ${fn.name}${fn.description ? `: ${fn.description}` : ''}${params ? ` (params: ${params})` : ''}`;
+    const toolDescriptions = Object.entries(localMcp['★'])
+      .map(([name, def]: [string, any]) => {
+        const params = def.input_schema?.properties ? Object.keys(def.input_schema.properties).join(', ') : '';
+        return `- ${name}${def.description ? `: ${def.description}` : ''}${params ? ` (params: ${params})` : ''}`;
       })
       .join('\n');
     systemParts.push(

@@ -87,6 +87,12 @@ export interface OpenAIRequest {
   stream_options?: {
     include_usage?: boolean;
   };
+  /** OpenAI-style reasoning effort (low | medium | high) — mapped to Qwen thinking. */
+  reasoning_effort?: string;
+  /** Client thinking intent (Claude Code `thinking` block, OpenAI `thinking` param). */
+  thinking?: { type?: string; enabled?: boolean; budget_tokens?: number; budgetTokens?: number };
+  /** Resolved thinking level, set internally by the route handlers. */
+  thinkingLevel?: 'off' | 'summary' | 'full';
 }
 
 export interface ParsedToolCall {

@@ -10,6 +10,7 @@ import { uploadImageAsFile, uploadLargeTextAsFile } from '../services/qwenFileUp
 import { sessionPool } from '../services/sessionPool.ts';
 import { cleanTextOfXmlArtifacts } from '../tools/xmlToolParser.ts';
 import { OpenAIRequest } from '../types/openai.ts';
+import { resolveThinkingLevel } from '../utils/thinkingLevel.ts';
 import { checkContextWindow, estimateTokens } from '../utils/tokenEstimator.ts';
 import { validateOpenAIRequest } from '../utils/validation.ts';
 import {
@@ -65,6 +66,15 @@ async function parseRequestBody(c: Context) {
   const toolCalling = config.getBool('TOOL_CALLING', true);
   const cleanOutput = config.getBool('CLEAN_OUTPUT', true);
 
+  // Resolve thinking level from client reasoning_effort / thinking block + config
+  const thinkingLevel = resolveThinkingLevel({
+    mode: config.get('THINKING_MODE', 'auto'),
+    model: body.model as string,
+    intent: body.thinking ? { ...body.thinking } : undefined,
+    reasoningEffort: body.reasoning_effort,
+  });
+  body.thinkingLevel = thinkingLevel;
+
   const messages = body.messages || [];
   handleImageModelFallback(body, messages);
   const { maxContext, maxOutput } = getModelSpecs(body);
@@ -115,11 +125,7 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
     });
   }
 
-  const {
-    qwenMessages: processedMessages,
-    systemContent,
-    toolResultsContent,
-  } = buildQwenMessages(cleanedMessages, body, availableTokens, toolCalling);
+  const { qwenMessages: processedMessages, toolResultsContent } = buildQwenMessages(cleanedMessages, body, availableTokens, toolCalling);
 
   // ── Inline content truncation ─────────────────────────────────
   // Keep the most recent ~50k characters inline; push older history
@@ -158,7 +164,7 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
   // (accounts can't access files uploaded by other accounts — must share the account)
   let lastFailedEmail: string | undefined;
 
-  const isThinkingModel = !body.model.includes('no-thinking');
+  const isThinkingModel = body.thinkingLevel !== 'off' && !body.model.includes('no-thinking');
   const MAX_ACCOUNT_RETRIES = 5;
   let lastError: any;
 
@@ -191,11 +197,15 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
       }
     }
 
-    // Upload a single context file: system instructions + tool results + older chat history
-    // Merging cuts upload overhead in half (one STS token, one OSS upload, one parse poll)
-    if (accountEmail && (systemContent || toolResultsContent || chatHistoryContent)) {
+    // Upload a single context file: tool results + older chat history.
+    // System instructions are NOT uploaded — they now stay inline in the
+    // prompt (buildQwenMessages), otherwise the model fixates on the file
+    // ("context.txt contains only instructions") and returns empty replies.
+    if (accountEmail && (toolResultsContent || chatHistoryContent)) {
       const parts: string[] = [];
-      if (systemContent) parts.push(`<system-instructions>\n${systemContent}\n</system-instructions>`);
+      parts.push(
+        `<REFERENCE_CONTEXT>\nThe following are older tool results and chat history from this conversation.\nThey are background reference — the actual current request appears inline above.\nRead them only if you need details not present inline.\n</REFERENCE_CONTEXT>`,
+      );
       if (toolResultsContent) parts.push(`<tool-results>\n${toolResultsContent}\n</tool-results>`);
       if (chatHistoryContent) parts.push(`<chat_history>\n${chatHistoryContent}\n</chat_history>`);
       const combinedContent = parts.join('\n\n');

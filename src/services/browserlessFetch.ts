@@ -15,6 +15,7 @@ import { logCrash, logEvent, logFetchCall } from '../utils/wreqCrashLogger.ts';
 import { extractBxUmidtoken } from './bxTokenExtractor.ts';
 import { generateBxPp, generateBxUa, refreshCookiesViaBrowser } from './fireyejsRunner.ts';
 import { logStore } from './logStore.ts';
+import { plainQwenFetch } from './plainFetch.ts';
 import { QWEN_API_BASE } from './qwen.ts';
 import { tokenCache } from './tokenCache.ts';
 import { disposeWreqWorker, wreqFetch } from './wreqFetch.ts';
@@ -35,6 +36,8 @@ export interface BrowserlessFetchOptions {
   signal?: AbortSignal;
   /** Keep the session alive for streaming. Default false — session is closed after response. */
   stream?: boolean;
+  /** Transport to use: 'wreq' (TLS impersonation worker) or 'plain' (native keep-alive fetch). Default 'wreq'. */
+  transport?: 'wreq' | 'plain';
 }
 
 /** Ensure bx-umidtoken is in headers, fetching from cache or sg-wum endpoint. */
@@ -136,7 +139,7 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
     return globalThis.fetch(url, { method, headers, body });
   }
 
-  const { method = 'GET', headers = {}, body, accountEmail, signal, stream } = options;
+  const { method = 'GET', headers = {}, body, accountEmail, signal, stream, transport = 'wreq' } = options;
 
   // Auto-inject bx tokens
   await ensureBxUmidtoken(headers);
@@ -173,6 +176,25 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
   await ensureAcwTcCookie(headers);
 
   const startTime = Date.now();
+
+  // ─── Fast plain transport (native fetch + keep-alive + SSXMOD) ───────
+  if (transport === 'plain' && !process.env.TEST_MOCK_PLAYWRIGHT) {
+    try {
+      const plain = await plainQwenFetch(url, { method, headers, body, signal });
+      if (!wafCheck(plain)) {
+        if (stream) {
+          (plain as any)._wreqClose = () => {
+            // nothing to close on the plain path
+          };
+        }
+        return plain;
+      }
+      logStore.log('warn', 'browserless', `plain transport WAF (${plain.status}) — falling back to wreq for ${url.split('?')[0]}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logStore.log('warn', 'browserless', `plain transport failed (${msg}) — falling back to wreq for ${url.split('?')[0]}`);
+    }
+  }
 
   // ─── Initial request via wreq worker ─────────────────────────────────
   try {

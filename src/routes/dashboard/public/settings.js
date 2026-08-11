@@ -26,7 +26,30 @@ var SETTINGS_SECTIONS = [
           { value: 'non-stream', label: 'Never stream' },
         ],
       },
+      {
+        key: 'THINKING_MODE',
+        label: 'THINKING_MODE',
+        type: 'select',
+        options: [
+          { value: 'auto', label: 'Auto (follow client)' },
+          { value: 'off', label: 'Off (no thinking)' },
+          { value: 'summary', label: 'Summary (compact thinking)' },
+          { value: 'full', label: 'Full (deep reasoning)' },
+        ],
+      },
       { key: 'MAX_TOOL_CALLS_PER_RESPONSE', label: 'MAX_TOOL_CALLS_PER_RESPONSE', type: 'number' },
+      {
+        key: 'FAST_TRANSPORT',
+        label: 'FAST_TRANSPORT',
+        type: 'checkbox',
+        desc: 'Fast plain-HTTP transport (native fetch + SSXMOD cookie, falls back to wreq on WAF)',
+      },
+      {
+        key: 'LOCAL_MCP_MAX_CHARS',
+        label: 'LOCAL_MCP_MAX_CHARS (tool schema budget, ~127KB Qwen limit)',
+        type: 'number',
+        desc: 'Shrinks the longest tool descriptions until local_mcp fits. Qwen returns empty responses when this exceeds ~127KB.',
+      },
     ],
   },
   {
@@ -37,6 +60,8 @@ var SETTINGS_SECTIONS = [
       { key: 'AUTH_TOKEN_MAX_AGE_MS', label: 'AUTH_TOKEN_MAX_AGE_MS', type: 'number' },
       { key: 'AUTH_REFRESH_BEFORE_MS', label: 'AUTH_REFRESH_BEFORE_MS', type: 'number' },
       { key: 'DELETE_SESSION', label: 'DELETE_SESSION', type: 'checkbox' },
+      { key: 'SESSION_POOL_SIZE', label: 'SESSION_POOL_SIZE (empty chats per account)', type: 'number' },
+      { key: 'SESSION_POOL_IDLE_TTL_MS', label: 'SESSION_POOL_IDLE_TTL_MS', type: 'number' },
     ],
   },
   {
