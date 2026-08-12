@@ -1130,3 +1130,109 @@ describe('local_mcp pipeline to Claude Code', () => {
     expect(toolCalls[0].parameters).toEqual({ command: 'ls -la /tmp' });
   });
 });
+
+// ── Schema-driven arg normalization (Claude Code snake_case) ──────
+
+// Regression test: Claude Code's Read/Edit/Write schemas declare snake_case
+// properties (file_path, old_string, new_string). The old hardcoded snake→camel
+// map emitted filePath/oldString → Claude Code rejected with
+// "required parameter file_path is missing. An unexpected parameter filePath"
+// and retried forever. The normalizer must map Qwen args to the schema names.
+
+describe('buildToolCallNormalizer (schema-driven)', () => {
+  const CLAUDE_CODE_TOOLS = [
+    {
+      type: 'function',
+      function: {
+        name: 'Bash',
+        description: 'Run a shell command',
+        parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'Read',
+        description: 'Read a file',
+        parameters: {
+          type: 'object',
+          properties: { file_path: { type: 'string' }, offset: { type: 'number' }, limit: { type: 'number' } },
+          required: ['file_path'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'Edit',
+        description: 'Edit a file',
+        parameters: {
+          type: 'object',
+          properties: { file_path: { type: 'string' }, old_string: { type: 'string' }, new_string: { type: 'string' } },
+          required: ['file_path', 'old_string', 'new_string'],
+        },
+      },
+    },
+  ];
+
+  test('snake_case from Qwen is preserved (file_path stays file_path)', async () => {
+    const { buildToolCallNormalizer } = await import('../routes/anthropic.ts');
+    const { normalizeArgs } = buildToolCallNormalizer(CLAUDE_CODE_TOOLS);
+    expect(normalizeArgs('Read', { file_path: '/tmp/x' })).toEqual({ file_path: '/tmp/x' });
+  });
+
+  test('camelCase from Qwen is mapped back to schema snake_case (filePath → file_path)', async () => {
+    const { buildToolCallNormalizer } = await import('../routes/anthropic.ts');
+    const { normalizeArgs } = buildToolCallNormalizer(CLAUDE_CODE_TOOLS);
+    expect(normalizeArgs('Read', { filePath: '/tmp/x' })).toEqual({ file_path: '/tmp/x' });
+    expect(normalizeArgs('Edit', { filePath: '/tmp/x', oldString: 'a', newString: 'b' })).toEqual({
+      file_path: '/tmp/x',
+      old_string: 'a',
+      new_string: 'b',
+    });
+  });
+
+  test('Bash command passes through unchanged', async () => {
+    const { buildToolCallNormalizer } = await import('../routes/anthropic.ts');
+    const { normalizeArgs, missingRequired } = buildToolCallNormalizer(CLAUDE_CODE_TOOLS);
+    const args = normalizeArgs('Bash', { command: 'ls -la' });
+    expect(args).toEqual({ command: 'ls -la' });
+    expect(missingRequired('Bash', args)).toEqual([]);
+  });
+
+  test('Read validates required file_path after camelCase normalization', async () => {
+    const { buildToolCallNormalizer } = await import('../routes/anthropic.ts');
+    const { normalizeArgs, missingRequired } = buildToolCallNormalizer(CLAUDE_CODE_TOOLS);
+    const args = normalizeArgs('Read', { filePath: '/tmp/x' });
+    expect(missingRequired('Read', args)).toEqual([]);
+    expect(missingRequired('Read', normalizeArgs('Read', { offset: 10 }))).toContain('file_path');
+  });
+
+  test('Edit rejects when a required param is missing', async () => {
+    const { buildToolCallNormalizer } = await import('../routes/anthropic.ts');
+    const { normalizeArgs, missingRequired } = buildToolCallNormalizer(CLAUDE_CODE_TOOLS);
+    const missing = missingRequired('Edit', normalizeArgs('Edit', { file_path: '/tmp/x', old_string: 'a' }));
+    expect(missing).toContain('new_string');
+  });
+
+  test('lowercase tool name resolves to PascalCase schema (read → Read)', async () => {
+    const { buildToolCallNormalizer } = await import('../routes/anthropic.ts');
+    const { normalizeArgs, missingRequired } = buildToolCallNormalizer(CLAUDE_CODE_TOOLS);
+    const args = normalizeArgs('read', { file_path: '/tmp/x' });
+    expect(missingRequired('read', args)).toEqual([]);
+  });
+
+  test('unknown tool with non-empty args is valid', async () => {
+    const { buildToolCallNormalizer } = await import('../routes/anthropic.ts');
+    const { normalizeArgs, missingRequired } = buildToolCallNormalizer(CLAUDE_CODE_TOOLS);
+    expect(missingRequired('WebSearch', normalizeArgs('WebSearch', { query: 'hi' }))).toEqual([]);
+    expect(missingRequired('WebSearch', {})).toContain('*');
+  });
+
+  test('without tool schemas, non-empty args pass (fallback)', async () => {
+    const { buildToolCallNormalizer } = await import('../routes/anthropic.ts');
+    const { missingRequired } = buildToolCallNormalizer(undefined);
+    expect(missingRequired('AnyTool', { x: 1 })).toEqual([]);
+    expect(missingRequired('AnyTool', {})).toContain('*');
+  });
+});

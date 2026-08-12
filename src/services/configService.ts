@@ -35,6 +35,8 @@ export interface ConfigSchema {
   SESSION_POOL_SIZE: string;
   SESSION_POOL_IDLE_TTL_MS: string;
   LOCAL_MCP_MAX_CHARS: string;
+  CAPTCHA_SOLVER: string;
+  CAPTCHA_SOLVE_TIMEOUT_MS: string;
 }
 
 export const DEFAULT_CONFIG: ConfigSchema = {
@@ -69,6 +71,8 @@ export const DEFAULT_CONFIG: ConfigSchema = {
   SESSION_POOL_SIZE: '2',
   SESSION_POOL_IDLE_TTL_MS: '600000',
   LOCAL_MCP_MAX_CHARS: '70000',
+  CAPTCHA_SOLVER: 'true',
+  CAPTCHA_SOLVE_TIMEOUT_MS: '120000',
 };
 
 const CONFIG_KEYS = new Set<string>(Object.keys(DEFAULT_CONFIG));

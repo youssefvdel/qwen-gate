@@ -50,6 +50,18 @@ var SETTINGS_SECTIONS = [
         type: 'number',
         desc: 'Shrinks the longest tool descriptions until local_mcp fits. Qwen returns empty responses when this exceeds ~127KB.',
       },
+      {
+        key: 'CAPTCHA_SOLVER',
+        label: 'CAPTCHA_SOLVER (interactive anti-bot CAPTCHA solving)',
+        type: 'checkbox',
+        desc: 'Opens a visible browser window with the account profile when Qwen hits FAIL_SYS_USER_VALIDATE, so the CAPTCHA can be solved on screen. Falls back to throttling+switching when off or on timeout.',
+      },
+      {
+        key: 'CAPTCHA_SOLVE_TIMEOUT_MS',
+        label: 'CAPTCHA_SOLVE_TIMEOUT_MS (ms to wait for manual solve)',
+        type: 'number',
+        desc: 'How long to keep the visible solver window open before giving up and switching accounts.',
+      },
     ],
   },
   {

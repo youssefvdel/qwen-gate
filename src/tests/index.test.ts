@@ -205,8 +205,9 @@ test('Chat Completions returns explicit error for non-SSE upstream JSON errors',
     assert.strictEqual(res.status, 429);
 
     const body = await res.json();
-    assert.match(body.error.message, /Qwen upstream error: RateLimited/);
-    assert.match(body.error.message, /upper limit/);
+    // JSON error bodies from Qwen are now routed through handleErrorResponse,
+    // so a RateLimited body yields the normalized 429 rate_limit_error message.
+    assert.match(body.error.message, /daily usage limit/);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -738,3 +739,115 @@ test('Anthropic /v1/messages streaming with local_mcp tool call emits correct to
     globalThis.fetch = originalFetch;
   }
 });
+
+test('Chat Completions: JSON CAPTCHA body is throttled, not returned as empty 200', async () => {
+  const originalFetch = globalThis.fetch;
+  (globalThis as any).fetch = async (input: any) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (url.includes('/api/v2/chat/completions')) {
+      return new Response(
+        JSON.stringify({
+          ret: ['FAIL_SYS_USER_VALIDATE', 'RGV587_ERROR::SM::mock'],
+          data: {},
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    return originalFetch(input);
+  };
+
+  try {
+    // Disable solver so the fallback throttle+switch path runs (mock env).
+    const originalCaptchaSolver = process.env.CAPTCHA_SOLVER;
+    const originalMockResult = process.env.CAPTCHA_SOLVER_MOCK_RESULT;
+    process.env.CAPTCHA_SOLVER = 'true';
+    process.env.CAPTCHA_SOLVER_MOCK_RESULT = 'false';
+
+    const req = new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders, { 'anthropic-version': '2023-06-01' }),
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: false,
+      }),
+    });
+
+    const res = await app.fetch(req);
+    // JSON CAPTCHA bodies must never produce an empty 200 — the upstream error
+    // path returns a real error status with a message.
+    assert.notStrictEqual(res.status, 200);
+    const body = await res.json();
+    assert.ok(body.error, 'Should carry an error object');
+    assert.ok((body.error.message || '').length > 0, 'Error message should be non-empty');
+
+    process.env.CAPTCHA_SOLVER = originalCaptchaSolver;
+    process.env.CAPTCHA_SOLVER_MOCK_RESULT = originalMockResult;
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('CAPTCHA solver: mock "solved" clears throttle and retries on the same account', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalCaptchaSolver = process.env.CAPTCHA_SOLVER;
+  const originalMockResult = process.env.CAPTCHA_SOLVER_MOCK_RESULT;
+  process.env.CAPTCHA_SOLVER = 'true';
+  process.env.CAPTCHA_SOLVER_MOCK_RESULT = 'true';
+
+  let callCount = 0;
+  (globalThis as any).fetch = async (input: any) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (url.includes('/api/v2/chat/completions')) {
+      callCount++;
+      if (callCount === 1) {
+        // First attempt: CAPTCHA. Solver mock resolves it.
+        return new Response(
+          JSON.stringify({
+            ret: ['FAIL_SYS_USER_VALIDATE', 'RGV587_ERROR::SM::mock'],
+            data: {},
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      // Second attempt (same account, retried after solve): normal stream.
+      const stream = new ReadableStream({
+        start(c) {
+          c.enqueue(
+            new TextEncoder().encode(
+              'data: {"choices": [{"delta": {"phase": "answer", "content": "captcha solved"}}]}\n\ndata: [DONE]\n\n',
+            ),
+          );
+          c.close();
+        },
+      });
+      return new Response(stream, { status: 200 });
+    }
+    return originalFetch(input);
+  };
+
+  try {
+    const req = new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders, { 'anthropic-version': '2023-06-01' }),
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: false,
+      }),
+    });
+
+    const res = await app.fetch(req);
+    assert.strictEqual(res.status, 200, 'Solved CAPTCHA should yield a successful response');
+    const body = await res.json();
+    assert.match(body.content?.[0]?.text || '', /captcha solved/);
+    assert.ok(callCount >= 2, `Expected at least 2 upstream calls (CAPTCHA + retry), got ${callCount}`);
+  } finally {
+    process.env.CAPTCHA_SOLVER = originalCaptchaSolver;
+    process.env.CAPTCHA_SOLVER_MOCK_RESULT = originalMockResult;
+    globalThis.fetch = originalFetch;
+  }
+});
+

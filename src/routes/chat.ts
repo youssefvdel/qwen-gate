@@ -4,7 +4,7 @@ import { pickAccount, throttleAccount } from '../services/auth.ts';
 import { config } from '../services/configService.ts';
 import { logStore } from '../services/logStore.ts';
 import { modelRouter } from '../services/modelRouter.ts';
-import { RetryableQwenStreamError } from '../services/qwen.ts';
+import { CaptchaSolvedError, RetryableQwenStreamError } from '../services/qwen.ts';
 import type { QwenFileAttachment } from '../services/qwenFileUpload.ts';
 import { uploadImageAsFile, uploadLargeTextAsFile } from '../services/qwenFileUpload.ts';
 import { sessionPool } from '../services/sessionPool.ts';
@@ -163,13 +163,15 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
   // File upload happens inside retry loop using the same account as the request
   // (accounts can't access files uploaded by other accounts — must share the account)
   let lastFailedEmail: string | undefined;
+  let retrySameAccount: string | undefined;
 
   const isThinkingModel = body.thinkingLevel !== 'off' && !body.model.includes('no-thinking');
   const MAX_ACCOUNT_RETRIES = 5;
   let lastError: any;
 
   for (let attempt = 0; attempt < MAX_ACCOUNT_RETRIES; attempt++) {
-    const selectedAccount = await pickAccount(lastFailedEmail);
+    const selectedAccount = retrySameAccount ? { email: retrySameAccount } : await pickAccount(lastFailedEmail);
+    retrySameAccount = undefined;
     const accountEmail = selectedAccount?.email;
     if (!selectedAccount && attempt > 0) {
       // On retry: if still no accounts, all are throttled — stop retrying
@@ -279,6 +281,14 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
       }
       // Bot detection / CAPTCHA: Qwen rejected BEFORE processing (safe to retry on another account).
       // Throttle the detected account so pickAccount won't pick it again.
+      if (err instanceof CaptchaSolvedError) {
+        // CAPTCHA was solved interactively and saveCookies() already cleared
+        // the throttle — retry on the SAME account, do NOT throttle it.
+        logStore.log('info', 'chat', `[Chat]   -> CAPTCHA solved on ${resolvedEmail}, retrying same account`);
+        lastError = undefined;
+        retrySameAccount = resolvedEmail;
+        continue;
+      }
       if (
         (err.message || '').includes('FAIL_SYS_USER_VALIDATE') ||
         (err.message || '').includes('CAPTCHA') ||
