@@ -15,6 +15,17 @@ interface PoolEntry {
   accountEmail?: string;
 }
 
+interface PoolSlot {
+  chatId: string;
+  accountEmail: string;
+  createdAt: number;
+}
+
+interface AccountPool {
+  slots: PoolSlot[];
+  toppingUp: boolean;
+}
+
 export function formatQwenEnvelopeError(json: any): string {
   const code = json?.data?.code || json?.code || 'unknown';
   const details = json?.data?.details || json?.details || json?.message || '';
@@ -25,11 +36,78 @@ export class SessionPool {
   private activeSessions = new Set<string>();
   private activeCount = 0;
   private releaseTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Per-account pools of pre-created EMPTY chats, so acquire doesn't wait on chats/new. */
+  private pools = new Map<string, AccountPool>();
 
   async initialize(): Promise<void> {
     if (process.env.TEST_MOCK_PLAYWRIGHT) {
       return;
     }
+    const target = this.poolTarget();
+    if (target <= 0) return;
+    for (const email of getAllAccountEmails()) {
+      this.topUp(email).catch(() => {
+        /* retried on next acquire */
+      });
+    }
+  }
+
+  private poolTarget(): number {
+    return Math.max(0, config.getInt('SESSION_POOL_SIZE', 2));
+  }
+
+  private poolIdleTtl(): number {
+    return Math.max(60_000, config.getInt('SESSION_POOL_IDLE_TTL_MS', 600_000));
+  }
+
+  private poolFor(email: string): AccountPool {
+    let p = this.pools.get(email);
+    if (!p) {
+      p = { slots: [], toppingUp: false };
+      this.pools.set(email, p);
+    }
+    return p;
+  }
+
+  /** Background top-up: keep up to SESSION_POOL_SIZE empty chats per account. */
+  private async topUp(email: string | undefined): Promise<void> {
+    const key = email || 'default';
+    const target = this.poolTarget();
+    if (target <= 0) return;
+    const p = this.poolFor(key);
+    if (p.toppingUp) return;
+    p.toppingUp = true;
+    try {
+      let guard = 0;
+      while (p.slots.length < target && guard++ < 20) {
+        try {
+          const headers = await getBasicHeaders(email);
+          const chatId = await this.createSessionWithHeaders(email, headers);
+          p.slots.push({ chatId, accountEmail: key, createdAt: Date.now() });
+        } catch (err: any) {
+          logStore.log('warn', 'pool', `Pool top-up failed for ${key.split('@')[0]}: ${err.message}`);
+          break;
+        }
+      }
+    } finally {
+      p.toppingUp = false;
+    }
+  }
+
+  /** Pop a ready empty chat for the account, dropping stale slots. Returns null if none. */
+  private popPooledChat(email: string): string | null {
+    const p = this.pools.get(email);
+    if (!p) return null;
+    if (p.slots.length === 0) return null;
+    const now = Date.now();
+    const ttl = this.poolIdleTtl();
+    const fresh = p.slots.filter((s) => now - s.createdAt < ttl);
+    const slot = fresh.shift() || null;
+    if (!slot) return null;
+    p.slots = fresh;
+    // Refill asynchronously so the next acquire also hits the pool
+    this.topUp(email).catch(() => {});
+    return slot.chatId;
   }
 
   /**
@@ -50,6 +128,27 @@ export class SessionPool {
       const resolvedEmail = email || (await pickAccount())?.email;
 
       try {
+        // Fast path: reuse a pre-created EMPTY chat from the pool (no chats/new round trip).
+        // Safe because pooled chats are brand-new (no server-side history) — the request
+        // then seeds it with its own full conversation.
+        if (resolvedEmail) {
+          const pooledChatId = this.popPooledChat(resolvedEmail);
+          if (pooledChatId) {
+            const headers = await getBasicHeaders(resolvedEmail);
+            const entry: PoolEntry = {
+              chatId: pooledChatId,
+              parentId: null,
+              inUse: true,
+              cachedHeaders: { cookie: headers.cookie, userAgent: headers.userAgent },
+              accountEmail: headers.email || resolvedEmail,
+            };
+            this.activeSessions.add(pooledChatId);
+            this.activeCount++;
+            logStore.log('info', 'pool', 'Session reused (pool)' + (entry.accountEmail ? ': ' + entry.accountEmail.split('@')[0] : ''));
+            return entry;
+          }
+        }
+
         // Fetch headers once, pass to createSessionWithHeaders (no duplicate getBasicHeaders call)
         const result = await Promise.race([
           (async () => {
@@ -74,6 +173,8 @@ export class SessionPool {
         };
         this.activeSessions.add(chatId);
         this.activeCount++;
+        // Refill the pool in the background for the next request
+        if (resolvedEmail) this.topUp(resolvedEmail).catch(() => {});
         logStore.log('info', 'pool', 'Session acquired' + (entry.accountEmail ? ': ' + entry.accountEmail.split('@')[0] : ''));
         return entry;
       } catch (err: any) {

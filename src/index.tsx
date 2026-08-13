@@ -436,7 +436,15 @@ if (import.meta.main) {
             logStore.log('warn', 'boot', `[2/5] Account config failed for ${acct.email}: ${err.message}`),
           );
         }
-        logStore.log('info', 'boot', `[2/5] Accounts configured: ${acctList.length} ready`);
+        logStore.log('info', 'boot', '[2/5] Accounts configured: ' + `${acctList.length} ready`);
+
+        // Pool pre-created empty Qwen chats so the first request of a turn doesn't pay chats/new latency
+        try {
+          const { sessionPool } = await import('./services/sessionPool.ts');
+          sessionPool.initialize().catch(() => {});
+        } catch (err: any) {
+          logStore.log('warn', 'boot', `[2/5] Session pool warm-up failed: ${err.message}`);
+        }
       } catch (err: any) {
         logStore.log('warn', 'boot', `[2/5] Configure failed: ${err.message}`);
       }

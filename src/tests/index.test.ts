@@ -205,8 +205,9 @@ test('Chat Completions returns explicit error for non-SSE upstream JSON errors',
     assert.strictEqual(res.status, 429);
 
     const body = await res.json();
-    assert.match(body.error.message, /Qwen upstream error: RateLimited/);
-    assert.match(body.error.message, /upper limit/);
+    // JSON error bodies from Qwen are now routed through handleErrorResponse,
+    // so a RateLimited body yields the normalized 429 rate_limit_error message.
+    assert.match(body.error.message, /daily usage limit/);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -487,6 +488,86 @@ test('Chat Completions endpoint - Non-streaming (stream: false)', async () => {
   }
 });
 
+test('Anthropic /v1/messages non-streaming emits tool_use from local_tool phase', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalAccounts = [...accounts];
+
+  accounts.push({
+    email: 'ns-tool-test@qwen-gate.dev',
+    password: 'test',
+    state: { token: 'mock-token', expiresAt: Date.now() + 3600000, refreshToken: null },
+    lastUsed: 0,
+    throttledUntil: 0,
+    refreshInFlight: null,
+    loginAttempt: 0,
+    inFlight: 0,
+    totalRequests: 0,
+    startupStatus: 'ready',
+  });
+
+  (globalThis as any).fetch = async (input: any) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (url.includes('/api/models')) {
+      return new Response(JSON.stringify({ data: [{ id: 'qwen3.7-max', owned_by: 'qwen' }] }), { status: 200 });
+    }
+    if (url.includes('/api/v2/chat/completions')) {
+      const stream = new ReadableStream({
+        start(c) {
+          c.enqueue(
+            new TextEncoder().encode(
+              'data: {"choices":[{"delta":{"phase":"local_tool","status":"finished","extra":{"local_mcp":{"★":[{"tool_name":"Bash","params":{"command":"echo hello"}}]}}}}]}\n\n',
+            ),
+          );
+          c.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+          c.close();
+        },
+      });
+      return new Response(stream, { status: 200 });
+    }
+    return originalFetch(input);
+  };
+
+  try {
+    const payload = {
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 100,
+      stream: false,
+      tools: [
+        {
+          name: 'Bash',
+          description: 'Run a shell command',
+          input_schema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+        },
+      ],
+      messages: [{ role: 'user', content: 'Run echo hello' }],
+    };
+
+    const req = new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        ...authHeaders,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const res = await app.fetch(req);
+    assert.strictEqual(res.status, 200, `Expected 200 got ${res.status}`);
+
+    const body = await res.json();
+    assert.strictEqual(body.stop_reason, 'tool_use');
+    const toolUse = body.content?.find((b: any) => b.type === 'tool_use');
+    assert.ok(toolUse, `Expected tool_use block in non-streaming response, got ${JSON.stringify(body.content)}`);
+    assert.strictEqual(toolUse.name, 'Bash');
+    assert.deepStrictEqual(toolUse.input, { command: 'echo hello' });
+  } finally {
+    accounts.length = 0;
+    accounts.push(...originalAccounts);
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('Anthropic streaming strips XML artifacts from text deltas', async () => {
   const originalFetch = globalThis.fetch;
   const originalAccounts = [...accounts];
@@ -735,6 +816,117 @@ test('Anthropic /v1/messages streaming with local_mcp tool call emits correct to
     assert.strictEqual(msgDelta.delta.stop_reason, 'tool_use');
   } finally {
     accounts.splice(0, accounts.length, ...originalAccounts);
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Chat Completions: JSON CAPTCHA body is throttled, not returned as empty 200', async () => {
+  const originalFetch = globalThis.fetch;
+  (globalThis as any).fetch = async (input: any) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (url.includes('/api/v2/chat/completions')) {
+      return new Response(
+        JSON.stringify({
+          ret: ['FAIL_SYS_USER_VALIDATE', 'RGV587_ERROR::SM::mock'],
+          data: {},
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    return originalFetch(input);
+  };
+
+  try {
+    // Disable solver so the fallback throttle+switch path runs (mock env).
+    const originalCaptchaSolver = process.env.CAPTCHA_SOLVER;
+    const originalMockResult = process.env.CAPTCHA_SOLVER_MOCK_RESULT;
+    process.env.CAPTCHA_SOLVER = 'true';
+    process.env.CAPTCHA_SOLVER_MOCK_RESULT = 'false';
+
+    const req = new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders, { 'anthropic-version': '2023-06-01' }),
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: false,
+      }),
+    });
+
+    const res = await app.fetch(req);
+    // JSON CAPTCHA bodies must never produce an empty 200 — the upstream error
+    // path returns a real error status with a message.
+    assert.notStrictEqual(res.status, 200);
+    const body = await res.json();
+    assert.ok(body.error, 'Should carry an error object');
+    assert.ok((body.error.message || '').length > 0, 'Error message should be non-empty');
+
+    process.env.CAPTCHA_SOLVER = originalCaptchaSolver;
+    process.env.CAPTCHA_SOLVER_MOCK_RESULT = originalMockResult;
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('CAPTCHA solver: mock "solved" clears throttle and retries on the same account', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalCaptchaSolver = process.env.CAPTCHA_SOLVER;
+  const originalMockResult = process.env.CAPTCHA_SOLVER_MOCK_RESULT;
+  process.env.CAPTCHA_SOLVER = 'true';
+  process.env.CAPTCHA_SOLVER_MOCK_RESULT = 'true';
+
+  let callCount = 0;
+  (globalThis as any).fetch = async (input: any) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (url.includes('/api/v2/chat/completions')) {
+      callCount++;
+      if (callCount === 1) {
+        // First attempt: CAPTCHA. Solver mock resolves it.
+        return new Response(
+          JSON.stringify({
+            ret: ['FAIL_SYS_USER_VALIDATE', 'RGV587_ERROR::SM::mock'],
+            data: {},
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      // Second attempt (same account, retried after solve): normal stream.
+      const stream = new ReadableStream({
+        start(c) {
+          c.enqueue(
+            new TextEncoder().encode(
+              'data: {"choices": [{"delta": {"phase": "answer", "content": "captcha solved"}}]}\n\ndata: [DONE]\n\n',
+            ),
+          );
+          c.close();
+        },
+      });
+      return new Response(stream, { status: 200 });
+    }
+    return originalFetch(input);
+  };
+
+  try {
+    const req = new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders, { 'anthropic-version': '2023-06-01' }),
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: false,
+      }),
+    });
+
+    const res = await app.fetch(req);
+    assert.strictEqual(res.status, 200, 'Solved CAPTCHA should yield a successful response');
+    const body = await res.json();
+    assert.match(body.content?.[0]?.text || '', /captcha solved/);
+    assert.ok(callCount >= 2, `Expected at least 2 upstream calls (CAPTCHA + retry), got ${callCount}`);
+  } finally {
+    process.env.CAPTCHA_SOLVER = originalCaptchaSolver;
+    process.env.CAPTCHA_SOLVER_MOCK_RESULT = originalMockResult;
     globalThis.fetch = originalFetch;
   }
 });

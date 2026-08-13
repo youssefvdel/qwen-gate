@@ -5,12 +5,13 @@ import { pickAccount, throttleAccount } from '../services/auth.ts';
 import { config } from '../services/configService.ts';
 import { logStore } from '../services/logStore.ts';
 import { modelRouter } from '../services/modelRouter.ts';
-import { RetryableQwenStreamError } from '../services/qwen.ts';
+import { CaptchaSolvedError, RetryableQwenStreamError } from '../services/qwen.ts';
 import type { QwenFileAttachment } from '../services/qwenFileUpload.ts';
 import { uploadImageAsFile, uploadLargeTextAsFile } from '../services/qwenFileUpload.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import { cleanTextOfXmlArtifacts, parseXmlToolCalls, xmlToolCallToParsed } from '../tools/xmlToolParser.ts';
 import type { OpenAIRequest, ParsedToolCall } from '../types/openai.ts';
+import { resolveThinkingLevel } from '../utils/thinkingLevel.ts';
 import { checkContextWindow, estimateTokens } from '../utils/tokenEstimator.ts';
 import {
   acquireSessionWithCorrections,
@@ -27,22 +28,23 @@ import { extractLocalMcpToolCalls } from './chatStreamingHelpers.ts';
 // ── Anthropic → Qwen model map ─────────────────────────────────────
 
 // ponytail: use dotted model names matching the Qwen API (/v1/models response).
-// models.json keys use dashes (qwen3-7-max) but Qwen API expects dots (qwen3.7-max).
-const ANTHROPIC_TO_QWEN: Record<string, string> = {
-  'claude-sonnet-4-20250514': 'qwen3.7-max',
-  'claude-sonnet-4-20241022': 'qwen3.6-plus',
-  'claude-3-5-sonnet-20241022': 'qwen3.6-plus',
-  'claude-opus-4-20250514': 'qwen3.7-max',
-  'claude-opus-4-8': 'qwen3.7-max',
-  'claude-sonnet-4-8': 'qwen3.7-max',
-  'claude-3-opus-20240229': 'qwen3.7-max',
-  'claude-sonnet-4-6-20250514': 'qwen3.7-max',
-  'claude-3-haiku-20240307': 'qwen3.5-flash',
-};
-const DEFAULT_QWEN_MODEL = 'qwen3.7-max';
+// Routing matches the family keyword anywhere in the name so both current
+// (claude-sonnet-4-…) and legacy (claude-3-5-sonnet-20241022) spellings work:
+//   Opus   → qwen3.8-max  (flagship)
+//   Sonnet → qwen3.7-max  (workhorse)
+//   Haiku  → qwen3.7-plus (fast/vision)
+const QWEN_MODEL_BY_TIER: Array<[pattern: RegExp, model: string]> = [
+  [/\bopus\b/i, 'qwen3.8-max'],
+  [/\bsonnet\b/i, 'qwen3.7-max'],
+  [/\bhaiku\b/i, 'qwen3.7-plus'],
+];
+const DEFAULT_QWEN_MODEL = 'qwen3.8-max';
 
 function mapModel(anthropicModel: string): string {
-  return ANTHROPIC_TO_QWEN[anthropicModel] || DEFAULT_QWEN_MODEL;
+  for (const [pattern, model] of QWEN_MODEL_BY_TIER) {
+    if (pattern.test(anthropicModel)) return model;
+  }
+  return DEFAULT_QWEN_MODEL;
 }
 
 // ── Request conversion ─────────────────────────────────────────────
@@ -168,6 +170,66 @@ function normalizeToolName(name: string): string {
   return CASE_MAP[name] || name;
 }
 
+// ── Tool-call arg normalizer (schema-driven) ───────────────────────
+
+// Claude Code sends tool schemas with snake_case property names
+// (file_path, old_string, new_string). The old hardcoded snake→camel map
+// emitted filePath/oldString to Claude Code, which validates args against its
+// OWN schema → "required parameter file_path is missing. An unexpected
+// parameter filePath was provided" → infinite client retry loop.
+// Instead, normalize Qwen's args to the EXACT property names the client schema
+// declares (case/underscore-insensitive match), and require only what the
+// schema lists as required. Falls back to old behavior for unknown tools.
+export function buildToolCallNormalizer(tools: any[] | undefined): {
+  normalizeArgs(toolName: string, args: any): any;
+  missingRequired(toolName: string, args: any): string[];
+} {
+  const propsByTool = new Map<string, Set<string>>();
+  const requiredByTool = new Map<string, string[]>();
+  const normKey = (s: string): string => s.replace(/[_-]/g, '').toLowerCase();
+
+  for (const t of tools || []) {
+    const fn = t?.function || {};
+    const name = fn.name;
+    if (!name) continue;
+    const params = fn.parameters || {};
+    const props = new Set<string>(Object.keys(params.properties || {}));
+    propsByTool.set(name, props);
+    const required = Array.isArray(params.required) ? params.required : [...props];
+    requiredByTool.set(name, required);
+  }
+
+  function findProp(toolName: string, key: string): string | undefined {
+    const props = propsByTool.get(toolName);
+    if (!props) return undefined;
+    if (props.has(key)) return key;
+    const nk = normKey(key);
+    for (const p of props) {
+      if (normKey(p) === nk) return p;
+    }
+    return undefined;
+  }
+
+  return {
+    normalizeArgs(toolName: string, args: any): any {
+      const mapped: any = {};
+      for (const [k, v] of Object.entries(args || {})) {
+        const canonical = findProp(normalizeToolName(toolName), k) || findProp(toolName, k) || k;
+        mapped[canonical] = v;
+      }
+      return mapped;
+    },
+    missingRequired(toolName: string, args: any): string[] {
+      const normalizedName = normalizeToolName(toolName);
+      const required = requiredByTool.get(normalizedName) || requiredByTool.get(toolName);
+      if (!required || required.length === 0) {
+        return args && typeof args === 'object' && Object.keys(args).length > 0 ? [] : ['*'];
+      }
+      return required.filter((p) => args[p] === undefined || args[p] === null || args[p] === '');
+    },
+  };
+}
+
 // ponytail: simple formatter for Anthropic content blocks in log display
 function formatContent(content: any): string {
   if (typeof content === 'string') return content;
@@ -187,7 +249,7 @@ function formatContent(content: any): string {
     .join('\n');
 }
 
-function convertOpenAIResponseToAnthropic(openAIResp: any, requestModel: string): any {
+function convertOpenAIResponseToAnthropic(openAIResp: any, requestModel: string, tools?: any[]): any {
   const choice = openAIResp.choices?.[0];
   const message = choice?.message || {};
   const content: any[] = [];
@@ -195,33 +257,7 @@ function convertOpenAIResponseToAnthropic(openAIResp: any, requestModel: string)
     content.push({ type: 'text', text: message.content });
   }
 
-  // ponytail: static Claude Code required param map — adapt if tools vary
-  const REQUIRED_PARAMS: Record<string, string[]> = {
-    Bash: ['command'],
-    Read: ['filePath'],
-    Edit: ['filePath', 'oldString', 'newString'],
-    Write: ['filePath', 'content'],
-  };
-
-  function mapParamName(paramName: string): string {
-    const SNAKE_TO_CAMEL: Record<string, string> = {
-      file_path: 'filePath',
-      old_string: 'oldString',
-      new_string: 'newString',
-    };
-    return SNAKE_TO_CAMEL[paramName] || paramName;
-  }
-
-  function isValidToolCall(name: string, args: any): boolean {
-    const required = REQUIRED_PARAMS[name];
-    if (required) {
-      const missing = required.filter((p) => args[p] === undefined || args[p] === null || args[p] === '');
-      if (missing.length > 0) return false;
-    } else if (!args || typeof args !== 'object' || Object.keys(args).length === 0) {
-      return false;
-    }
-    return true;
-  }
+  const { normalizeArgs, missingRequired } = buildToolCallNormalizer(tools);
 
   if (message.tool_calls) {
     for (const tc of message.tool_calls) {
@@ -232,13 +268,11 @@ function convertOpenAIResponseToAnthropic(openAIResp: any, requestModel: string)
         /* ignore */
       }
       if (!args || typeof args !== 'object') continue;
-      // Map snake_case to camelCase
-      const mapped: any = {};
-      for (const [k, v] of Object.entries(args)) {
-        mapped[mapParamName(k)] = v;
-      }
+      // Map Qwen args to the tool schema's canonical property names
+      const mapped = normalizeArgs(tc.function.name, args);
       const normalizedName = normalizeToolName(tc.function.name);
-      if (!isValidToolCall(normalizedName, mapped)) {
+      const missing = missingRequired(normalizedName, mapped);
+      if (missing.length > 0) {
         logStore.log(
           'debug',
           'chat',
@@ -307,11 +341,7 @@ async function setupAnthropicSession(
     });
   }
 
-  const {
-    qwenMessages: processedMessages,
-    systemContent,
-    toolResultsContent,
-  } = buildQwenMessages(cleanedMessages, body, availableTokens, toolCalling);
+  const { qwenMessages: processedMessages, toolResultsContent } = buildQwenMessages(cleanedMessages, body, availableTokens, toolCalling);
 
   const MAX_INLINE_CHARS = 50000;
   let inlineContent = processedMessages[0].content as string;
@@ -335,11 +365,13 @@ async function setupAnthropicSession(
   }
 
   let lastFailedEmail: string | undefined;
-  const isThinkingModel = !body.model.includes('no-thinking');
+  let retrySameAccount: string | undefined;
+  const isThinkingModel = body.thinkingLevel !== 'off' && !body.model.includes('no-thinking');
   let lastError: any;
 
   for (let attempt = 0; attempt < MAX_ACCOUNT_RETRIES; attempt++) {
-    const selectedAccount = await pickAccount(lastFailedEmail);
+    let selectedAccount = retrySameAccount ? { email: retrySameAccount } : await pickAccount(lastFailedEmail);
+    retrySameAccount = undefined;
     const accountEmail = selectedAccount?.email;
     logStore.log(
       'debug',
@@ -375,9 +407,11 @@ async function setupAnthropicSession(
       }
     }
 
-    if (accountEmail && (systemContent || toolResultsContent || chatHistoryContent)) {
+    if (accountEmail && (toolResultsContent || chatHistoryContent)) {
       const parts: string[] = [];
-      if (systemContent) parts.push(`<system-instructions>\n${systemContent}\n</system-instructions>`);
+      parts.push(
+        `<REFERENCE_CONTEXT>\nThe following are older tool results and chat history from this conversation.\nThey are background reference — the actual current request appears inline above.\nRead them only if you need details not present inline.\n</REFERENCE_CONTEXT>`,
+      );
       if (toolResultsContent) parts.push(`<tool-results>\n${toolResultsContent}\n</tool-results>`);
       if (chatHistoryContent) parts.push(`<chat_history>\n${chatHistoryContent}\n</chat_history>`);
       try {
@@ -440,6 +474,14 @@ async function setupAnthropicSession(
         logStore.log('warn', 'chat', `[Anthropic]   -> rate-limited, trying next account`);
         lastFailedEmail = resolvedEmail;
         lastError = err;
+        continue;
+      }
+      if (err instanceof CaptchaSolvedError) {
+        // CAPTCHA was solved interactively and saveCookies() already cleared
+        // the throttle — retry on the SAME account, do NOT throttle it.
+        logStore.log('info', 'chat', `[Anthropic]   -> CAPTCHA solved on ${resolvedEmail}, retrying same account`);
+        lastError = undefined;
+        retrySameAccount = resolvedEmail;
         continue;
       }
       if (
@@ -548,6 +590,7 @@ async function handleAnthropicStream(
   nextParentId: string | null,
   sessionHeaders: any,
   promptTokenEstimate: number = 0,
+  tools?: any[],
 ): Promise<Response> {
   c.header('Content-Type', 'text/event-stream');
   c.header('Cache-Control', 'no-cache');
@@ -806,25 +849,10 @@ async function handleAnthropicStream(
         );
       }
 
-      // Validate and filter tool calls
-      // ponytail: static Claude Code required param map — upgrade if tools vary
-      const REQUIRED_PARAMS: Record<string, string[]> = {
-        Bash: ['command'],
-        Read: ['filePath'],
-        Edit: ['filePath', 'oldString', 'newString'],
-        Write: ['filePath', 'content'],
-      };
-
-      // ponytail: snake_case → camelCase mapping for Qwen param names
-      function mapParamName(toolName: string, paramName: string): string {
-        const SNAKE_TO_CAMEL: Record<string, string> = {
-          file_path: 'filePath',
-          old_string: 'oldString',
-          new_string: 'newString',
-          tool_call_id: 'toolCallId',
-        };
-        return SNAKE_TO_CAMEL[paramName] || paramName;
-      }
+      // Validate and filter tool calls using the actual tool schemas sent by
+      // Claude Code (property names + required). Qwen's camelCase variants are
+      // normalized to the schema's snake_case names (file_path, old_string…).
+      const { normalizeArgs, missingRequired } = buildToolCallNormalizer(tools);
 
       function validateToolCall(tc: ParsedToolCall): { valid: boolean; fixedArgs: any } {
         let args: any = {};
@@ -835,28 +863,18 @@ async function handleAnthropicStream(
         }
         if (!args || typeof args !== 'object') return { valid: false, fixedArgs: {} };
 
-        // Map snake_case to camelCase
-        const mapped: any = {};
-        for (const [k, v] of Object.entries(args)) {
-          mapped[mapParamName(tc.name, k)] = v;
-        }
+        const mapped = normalizeArgs(tc.name, args);
         args = mapped;
 
         const toolName = normalizeToolName(tc.name);
-        const required = REQUIRED_PARAMS[toolName];
-        if (required) {
-          const missing = required.filter((p) => args[p] === undefined || args[p] === null || args[p] === '');
-          if (missing.length > 0) {
-            logStore.log(
-              'debug',
-              'chat',
-              `[Anthropic] Skipped tool call: ${tc.name} missing required params: ${missing.join(', ')} (had: ${JSON.stringify(args)})`,
-            );
-            return { valid: false, fixedArgs: args };
-          }
-        } else if (Object.keys(args).length === 0) {
-          logStore.log('debug', 'chat', `[Anthropic] Skipped tool call: ${tc.name} (no params)`);
-          return { valid: false, fixedArgs: {} };
+        const missing = missingRequired(toolName, args);
+        if (missing.length > 0) {
+          logStore.log(
+            'debug',
+            'chat',
+            `[Anthropic] Skipped tool call: ${tc.name} missing required params: ${missing.join(', ')} (had: ${JSON.stringify(args)})`,
+          );
+          return { valid: false, fixedArgs: args };
         }
 
         return { valid: true, fixedArgs: args };
@@ -1047,6 +1065,17 @@ export async function anthropicMessages(c: Context) {
     // Map model
     const mappedModel = mapModel(anthropicModel);
 
+    // Resolve thinking level from Claude Code's `thinking` block (budget_tokens)
+    // + THINKING_MODE config. Levels: off / summary / full.
+    const thinkingLevel = resolveThinkingLevel({
+      mode: config.get('THINKING_MODE', 'auto'),
+      model: mappedModel,
+      intent: rawBody.thinking ? { ...rawBody.thinking } : undefined,
+    });
+    if (rawBody.thinking) {
+      logStore.log('debug', 'chat', `[Anthropic] thinking=${JSON.stringify(rawBody.thinking)} → level=${thinkingLevel}`);
+    }
+
     // Convert messages and tools to OpenAI format
     const openaiMessages = anthropicMessagesToOpenAI(messages, system);
     const convertedTools = anthropicToolsToOpenAI(tools);
@@ -1056,6 +1085,7 @@ export async function anthropicMessages(c: Context) {
       model: mappedModel,
       messages: openaiMessages,
       stream: false,
+      thinkingLevel,
       ...(convertedTools.length > 0 && { tools: convertedTools }),
       ...(toolChoice && { tool_choice: toolChoice }),
     };
@@ -1156,7 +1186,7 @@ export async function anthropicMessages(c: Context) {
           <any>openAIResponse.status,
         );
       }
-      const anthropicResp = convertOpenAIResponseToAnthropic(openAIResp, anthropicModel);
+      const anthropicResp = convertOpenAIResponseToAnthropic(openAIResp, anthropicModel, convertedTools);
       logStore.log(
         'debug',
         'chat',
@@ -1179,6 +1209,7 @@ export async function anthropicMessages(c: Context) {
       nextParentId,
       sessionHeaders,
       promptTokenEstimate,
+      convertedTools,
     );
     logStore.log('debug', 'chat', `[Anthropic] Streaming completed latency=${Date.now() - _requestStartTime}ms`);
     cancelWatchdog();

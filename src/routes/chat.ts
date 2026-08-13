@@ -4,12 +4,13 @@ import { pickAccount, throttleAccount } from '../services/auth.ts';
 import { config } from '../services/configService.ts';
 import { logStore } from '../services/logStore.ts';
 import { modelRouter } from '../services/modelRouter.ts';
-import { RetryableQwenStreamError } from '../services/qwen.ts';
+import { CaptchaSolvedError, RetryableQwenStreamError } from '../services/qwen.ts';
 import type { QwenFileAttachment } from '../services/qwenFileUpload.ts';
 import { uploadImageAsFile, uploadLargeTextAsFile } from '../services/qwenFileUpload.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import { cleanTextOfXmlArtifacts } from '../tools/xmlToolParser.ts';
 import { OpenAIRequest } from '../types/openai.ts';
+import { resolveThinkingLevel } from '../utils/thinkingLevel.ts';
 import { checkContextWindow, estimateTokens } from '../utils/tokenEstimator.ts';
 import { validateOpenAIRequest } from '../utils/validation.ts';
 import {
@@ -65,6 +66,15 @@ async function parseRequestBody(c: Context) {
   const toolCalling = config.getBool('TOOL_CALLING', true);
   const cleanOutput = config.getBool('CLEAN_OUTPUT', true);
 
+  // Resolve thinking level from client reasoning_effort / thinking block + config
+  const thinkingLevel = resolveThinkingLevel({
+    mode: config.get('THINKING_MODE', 'auto'),
+    model: body.model as string,
+    intent: body.thinking ? { ...body.thinking } : undefined,
+    reasoningEffort: body.reasoning_effort,
+  });
+  body.thinkingLevel = thinkingLevel;
+
   const messages = body.messages || [];
   handleImageModelFallback(body, messages);
   const { maxContext, maxOutput } = getModelSpecs(body);
@@ -115,11 +125,7 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
     });
   }
 
-  const {
-    qwenMessages: processedMessages,
-    systemContent,
-    toolResultsContent,
-  } = buildQwenMessages(cleanedMessages, body, availableTokens, toolCalling);
+  const { qwenMessages: processedMessages, toolResultsContent } = buildQwenMessages(cleanedMessages, body, availableTokens, toolCalling);
 
   // ── Inline content truncation ─────────────────────────────────
   // Keep the most recent ~50k characters inline; push older history
@@ -157,13 +163,15 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
   // File upload happens inside retry loop using the same account as the request
   // (accounts can't access files uploaded by other accounts — must share the account)
   let lastFailedEmail: string | undefined;
+  let retrySameAccount: string | undefined;
 
-  const isThinkingModel = !body.model.includes('no-thinking');
+  const isThinkingModel = body.thinkingLevel !== 'off' && !body.model.includes('no-thinking');
   const MAX_ACCOUNT_RETRIES = 5;
   let lastError: any;
 
   for (let attempt = 0; attempt < MAX_ACCOUNT_RETRIES; attempt++) {
-    const selectedAccount = await pickAccount(lastFailedEmail);
+    const selectedAccount = retrySameAccount ? { email: retrySameAccount } : await pickAccount(lastFailedEmail);
+    retrySameAccount = undefined;
     const accountEmail = selectedAccount?.email;
     if (!selectedAccount && attempt > 0) {
       // On retry: if still no accounts, all are throttled — stop retrying
@@ -191,11 +199,15 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
       }
     }
 
-    // Upload a single context file: system instructions + tool results + older chat history
-    // Merging cuts upload overhead in half (one STS token, one OSS upload, one parse poll)
-    if (accountEmail && (systemContent || toolResultsContent || chatHistoryContent)) {
+    // Upload a single context file: tool results + older chat history.
+    // System instructions are NOT uploaded — they now stay inline in the
+    // prompt (buildQwenMessages), otherwise the model fixates on the file
+    // ("context.txt contains only instructions") and returns empty replies.
+    if (accountEmail && (toolResultsContent || chatHistoryContent)) {
       const parts: string[] = [];
-      if (systemContent) parts.push(`<system-instructions>\n${systemContent}\n</system-instructions>`);
+      parts.push(
+        `<REFERENCE_CONTEXT>\nThe following are older tool results and chat history from this conversation.\nThey are background reference — the actual current request appears inline above.\nRead them only if you need details not present inline.\n</REFERENCE_CONTEXT>`,
+      );
       if (toolResultsContent) parts.push(`<tool-results>\n${toolResultsContent}\n</tool-results>`);
       if (chatHistoryContent) parts.push(`<chat_history>\n${chatHistoryContent}\n</chat_history>`);
       const combinedContent = parts.join('\n\n');
@@ -269,6 +281,14 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
       }
       // Bot detection / CAPTCHA: Qwen rejected BEFORE processing (safe to retry on another account).
       // Throttle the detected account so pickAccount won't pick it again.
+      if (err instanceof CaptchaSolvedError) {
+        // CAPTCHA was solved interactively and saveCookies() already cleared
+        // the throttle — retry on the SAME account, do NOT throttle it.
+        logStore.log('info', 'chat', `[Chat]   -> CAPTCHA solved on ${resolvedEmail}, retrying same account`);
+        lastError = undefined;
+        retrySameAccount = resolvedEmail;
+        continue;
+      }
       if (
         (err.message || '').includes('FAIL_SYS_USER_VALIDATE') ||
         (err.message || '').includes('CAPTCHA') ||

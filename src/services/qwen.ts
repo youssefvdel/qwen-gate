@@ -3,6 +3,7 @@ import { CircuitBreaker, CircuitOpenError, withRetry } from '../utils/retry.ts';
 import { logCrash, logSessionClose } from '../utils/wreqCrashLogger.ts';
 import { decrementInFlight, getTokenWithAccount, pickAccount, throttleAccount } from './auth.ts';
 import { browserlessFetch } from './browserlessFetch.ts';
+import { solveCaptchaOnProfile } from './captchaSolver.ts';
 import { config } from './configService.ts';
 import { logStore } from './logStore.ts';
 import { completeEntry, createNetworkEntry, errorEntry, recordResponse, recordStreamChunk } from './networkDebug.ts';
@@ -15,15 +16,17 @@ export const QWEN_API_BASE = 'https://chat.qwen.ai';
 export const QWEN_CHAT_COMPLETIONS_URL = `${QWEN_API_BASE}/api/v2/chat/completions`;
 export const QWEN_SETTINGS_URL = `${QWEN_API_BASE}/api/v2/users/user/settings/update`;
 
+export type ThinkingFormat = 'summary' | 'full';
+
 /** Build shared feature_config for Qwen message payloads. */
-export function buildFeatureConfig(_enableThinking: boolean): Record<string, any> {
+export function buildFeatureConfig(enableThinking: boolean, thinkingFormat: ThinkingFormat = 'summary'): Record<string, any> {
   return {
-    thinking_enabled: true,
+    thinking_enabled: enableThinking,
     output_schema: 'phase',
     research_mode: 'normal',
     auto_thinking: false,
     thinking_mode: 'Thinking',
-    thinking_format: 'summary',
+    thinking_format: thinkingFormat,
     auto_search: true,
   };
 }
@@ -48,6 +51,18 @@ export class QwenUpstreamError extends Error {
     this.name = 'QwenUpstreamError';
     this.upstreamCode = upstreamCode;
     this.upstreamStatus = upstreamStatus;
+  }
+}
+
+/**
+ * Thrown after an interactive CAPTCHA solve succeeded — the caller must retry
+ * on the SAME account (throttle was already cleared by saveCookies) instead of
+ * throttling it and rotating to the next account.
+ */
+export class CaptchaSolvedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CaptchaSolvedError';
   }
 }
 
@@ -304,10 +319,24 @@ export async function createQwenStream(
           throw new QwenUpstreamError(`Qwen upstream error: ${code}: ${details}.${wait}`, code, status);
         }
 
-        // Qwen anti-bot CAPTCHA — throttle account and switch
+        // Qwen anti-bot CAPTCHA — try interactive solver first, else throttle+switch
         if (errorJson?.ret?.[0] === 'FAIL_SYS_USER_VALIDATE') {
           const details = errorJson.ret[1] || 'CAPTCHA required';
           logStore.log('warn', 'qwen', `CAPTCHA detected for ${currentAccountEmail || 'unknown'}: ${details}`);
+
+          const captchaSolverEnabled = config.get('CAPTCHA_SOLVER') === 'true';
+          if (captchaSolverEnabled && currentAccountEmail) {
+            const solveTimeoutMs = Number(config.get('CAPTCHA_SOLVE_TIMEOUT_MS') || 120000);
+            const solved = await solveCaptchaOnProfile(currentAccountEmail, { timeoutMs: solveTimeoutMs });
+            if (solved) {
+              logStore.log('info', 'qwen', `[Qwen] CAPTCHA solved interactively for ${currentAccountEmail} — retrying with fresh token`);
+              errorEntry(debugEntryId, 'CAPTCHA solved via interactive solver');
+              // saveCookies() already cleared the throttle — retry on the same account
+              throw new CaptchaSolvedError('Qwen CAPTCHA solved — retrying on same account');
+            }
+            logStore.log('warn', 'qwen', `[Qwen] Interactive CAPTCHA solve failed for ${currentAccountEmail} — throttling and switching`);
+          }
+
           if (currentAccountEmail) {
             throttleAccount(currentAccountEmail, 5 * 60 * 1000);
             logStore.log(
@@ -333,7 +362,11 @@ export async function createQwenStream(
           throw new RetryableQwenStreamError(`Qwen: ${errorJson.data.details}`, 0);
         }
       } catch (parseOrRetryError) {
-        if (parseOrRetryError instanceof RetryableQwenStreamError || parseOrRetryError instanceof QwenUpstreamError) {
+        if (
+          parseOrRetryError instanceof RetryableQwenStreamError ||
+          parseOrRetryError instanceof QwenUpstreamError ||
+          parseOrRetryError instanceof CaptchaSolvedError
+        ) {
           throw parseOrRetryError;
         }
       }
@@ -391,6 +424,7 @@ export async function createQwenStream(
       body: bodyStr,
       accountEmail: currentAccountEmail,
       stream: true, // keep session alive for streaming via impers worker
+      transport: config.getBool('FAST_TRANSPORT', true) ? 'plain' : 'wreq',
     });
     logStore.log(
       'debug',
@@ -416,6 +450,18 @@ export async function createQwenStream(
   if (!result.response.body) {
     throw new Error(`Qwen returned empty response body (status ${result.response.status})`);
   }
+
+  // Qwen may answer an ERROR with HTTP 200 + a JSON body (anti-bot CAPTCHA
+  // FAIL_SYS_USER_VALIDATE, session invalidations, etc.) instead of an SSE
+  // stream. Previously this passed straight into the SSE reader which saw no
+  // "data:" lines and produced an EMPTY response → Claude Code churned with
+  // "no content" while the account was actually being captcha'd. Detect JSON
+  // bodies here and route them through handleErrorResponse (throttle+switch).
+  const respContentType = result.response.headers.get('content-type') || '';
+  if (respContentType.includes('application/json') && !respContentType.includes('text/event-stream')) {
+    await handleErrorResponse(result.response, lastDebugEntryId ?? '');
+  }
+
   const streamDebugEntryId = lastDebugEntryId;
   const textDecoder = new TextDecoder();
   const wreqClose = (result.response as any)._wreqClose as (() => void) | undefined;
