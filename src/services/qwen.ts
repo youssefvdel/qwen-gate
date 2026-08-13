@@ -329,20 +329,12 @@ export async function createQwenStream(
             const solveTimeoutMs = Number(config.get('CAPTCHA_SOLVE_TIMEOUT_MS') || 120000);
             const solved = await solveCaptchaOnProfile(currentAccountEmail, { timeoutMs: solveTimeoutMs });
             if (solved) {
-              logStore.log(
-                'info',
-                'qwen',
-                `[Qwen] CAPTCHA solved interactively for ${currentAccountEmail} — retrying with fresh token`,
-              );
+              logStore.log('info', 'qwen', `[Qwen] CAPTCHA solved interactively for ${currentAccountEmail} — retrying with fresh token`);
               errorEntry(debugEntryId, 'CAPTCHA solved via interactive solver');
               // saveCookies() already cleared the throttle — retry on the same account
               throw new CaptchaSolvedError('Qwen CAPTCHA solved — retrying on same account');
             }
-            logStore.log(
-              'warn',
-              'qwen',
-              `[Qwen] Interactive CAPTCHA solve failed for ${currentAccountEmail} — throttling and switching`,
-            );
+            logStore.log('warn', 'qwen', `[Qwen] Interactive CAPTCHA solve failed for ${currentAccountEmail} — throttling and switching`);
           }
 
           if (currentAccountEmail) {

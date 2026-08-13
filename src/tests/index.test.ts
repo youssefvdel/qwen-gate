@@ -488,6 +488,86 @@ test('Chat Completions endpoint - Non-streaming (stream: false)', async () => {
   }
 });
 
+test('Anthropic /v1/messages non-streaming emits tool_use from local_tool phase', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalAccounts = [...accounts];
+
+  accounts.push({
+    email: 'ns-tool-test@qwen-gate.dev',
+    password: 'test',
+    state: { token: 'mock-token', expiresAt: Date.now() + 3600000, refreshToken: null },
+    lastUsed: 0,
+    throttledUntil: 0,
+    refreshInFlight: null,
+    loginAttempt: 0,
+    inFlight: 0,
+    totalRequests: 0,
+    startupStatus: 'ready',
+  });
+
+  (globalThis as any).fetch = async (input: any) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (url.includes('/api/models')) {
+      return new Response(JSON.stringify({ data: [{ id: 'qwen3.7-max', owned_by: 'qwen' }] }), { status: 200 });
+    }
+    if (url.includes('/api/v2/chat/completions')) {
+      const stream = new ReadableStream({
+        start(c) {
+          c.enqueue(
+            new TextEncoder().encode(
+              'data: {"choices":[{"delta":{"phase":"local_tool","status":"finished","extra":{"local_mcp":{"★":[{"tool_name":"Bash","params":{"command":"echo hello"}}]}}}}]}\n\n',
+            ),
+          );
+          c.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+          c.close();
+        },
+      });
+      return new Response(stream, { status: 200 });
+    }
+    return originalFetch(input);
+  };
+
+  try {
+    const payload = {
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 100,
+      stream: false,
+      tools: [
+        {
+          name: 'Bash',
+          description: 'Run a shell command',
+          input_schema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+        },
+      ],
+      messages: [{ role: 'user', content: 'Run echo hello' }],
+    };
+
+    const req = new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        ...authHeaders,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const res = await app.fetch(req);
+    assert.strictEqual(res.status, 200, `Expected 200 got ${res.status}`);
+
+    const body = await res.json();
+    assert.strictEqual(body.stop_reason, 'tool_use');
+    const toolUse = body.content?.find((b: any) => b.type === 'tool_use');
+    assert.ok(toolUse, `Expected tool_use block in non-streaming response, got ${JSON.stringify(body.content)}`);
+    assert.strictEqual(toolUse.name, 'Bash');
+    assert.deepStrictEqual(toolUse.input, { command: 'echo hello' });
+  } finally {
+    accounts.length = 0;
+    accounts.push(...originalAccounts);
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('Anthropic streaming strips XML artifacts from text deltas', async () => {
   const originalFetch = globalThis.fetch;
   const originalAccounts = [...accounts];
@@ -850,4 +930,3 @@ test('CAPTCHA solver: mock "solved" clears throttle and retries on the same acco
     globalThis.fetch = originalFetch;
   }
 });
-
