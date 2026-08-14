@@ -3,7 +3,10 @@
 #  Qwen Gate — One-Command Installer
 # ============================================================================
 #  Usage:
-#    curl -sSL https://raw.githubusercontent.com/youssefvdel/qwen-gate/main/install.sh | bash
+#    Stable (default):
+#      curl -sSL https://raw.githubusercontent.com/youssefvdel/qwen-gate/main/install.sh | bash
+#    Canary (bleeding edge — new features faster, less battle-tested):
+#      QWENGATE_BRANCH=canary curl -sSL https://raw.githubusercontent.com/youssefvdel/qwen-gate/main/install.sh | bash
 #
 #  Clones the repo, installs Bun + dependencies, creates config, and
 #  symlinks the CLI so you can run `qg` from anywhere.
@@ -14,6 +17,12 @@ set -e
 REPO_URL="https://github.com/youssefvdel/qwen-gate.git"
 INSTALL_DIR="./qwen-gate"
 DEFAULT_PORT=26405
+
+# ── Channel selection ────────────────────────────────────────────────
+# QWENGATE_BRANCH selects the release channel:
+#   main   = stable, for normal users (default)
+#   canary = pre-release, newest fixes faster but less battle-tested
+BRANCH="${QWENGATE_BRANCH:-main}"
 
 # ── Colors & symbols ─────────────────────────────────────────────────
 RED='\033[0;31m'   GREEN='\033[0;32m'  YELLOW='\033[0;33m'
@@ -76,20 +85,24 @@ else
 fi
 
 # ── Step 3: Clone or update the repo ─────────────────────────────────
-info "Setting up qwen-gate..."
+info "Setting up qwen-gate... (channel: $BRANCH)"
 INSTALL_PATH="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/qwen-gate"
 INSTALL_PATH="${INSTALL_PATH:-$(pwd)/qwen-gate}"
 
 if [ -d "$INSTALL_DIR" ]; then
   if [ -d "$INSTALL_DIR/.git" ]; then
-    info "Repository already exists at $INSTALL_DIR — pulling latest..."
-    git -C "$INSTALL_DIR" pull --ff-only && ok "Updated to latest version" || warn "Pull failed — using existing version"
+    info "Repository already exists at $INSTALL_DIR — pulling latest $BRANCH..."
+    if git -C "$INSTALL_DIR" fetch origin "$BRANCH" --quiet 2>/dev/null && git -C "$INSTALL_DIR" checkout "$BRANCH" --quiet 2>/dev/null && git -C "$INSTALL_DIR" pull --ff-only --quiet 2>/dev/null; then
+      ok "Updated to latest $BRANCH"
+    else
+      warn "Update failed — using existing version"
+    fi
   else
     fail "$INSTALL_DIR exists but is not a git repository. Remove it or choose a different path."
   fi
 else
-  info "Cloning qwen-gate..."
-  git clone "$REPO_URL" "$INSTALL_DIR"
+  info "Cloning qwen-gate ($BRANCH)..."
+  git clone --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
   ok "Cloned to $INSTALL_DIR"
 fi
 
