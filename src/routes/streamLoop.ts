@@ -1,5 +1,6 @@
 import { config } from '../services/configService.ts';
 import { logStore } from '../services/logStore.ts';
+import { reportRateLimitWall } from '../services/qwen.ts';
 import { cleanTextOfXmlArtifacts, parseXmlToolCalls } from '../tools/xmlToolParser.ts';
 import { type AmplificationGuardState, checkAmplificationGuard, getSnapshotDelta, parseQwenErrorPayload } from './chatHelpers.ts';
 import { filterContentPipeline, processStreamData, type StreamProcessingCtx, type StreamProcessingState } from './chatStreamingHelpers.ts';
@@ -210,9 +211,19 @@ export async function handlePostStreamCompletion(
     }
 
     // ── Upstream error: emit it AFTER the partial content ────────────
-    const upstreamError =
-      parseQwenErrorPayload(buffer) || (streamState.upstreamError ? { message: streamState.upstreamError, status: 502 as const } : null);
+    const parsedError = parseQwenErrorPayload(buffer);
+    const upstreamCode = parsedError?.code ?? streamState.upstreamCode;
+    const upstreamWaitHours = parsedError?.waitHours ?? streamState.upstreamWaitHours;
+    const upstreamError = parsedError || (streamState.upstreamError ? { message: streamState.upstreamError, status: 502 as const } : null);
     if (upstreamError) {
+      // RateLimited wall inside an HTTP 200 stream: apply the same native
+      // cooldown as an HTTP-level wall. Content may already be out — never
+      // restart the stream here (it would duplicate output); finish with
+      // the existing error mechanism instead.
+      if (upstreamCode === 'RateLimited') {
+        reportRateLimitWall(resolvedEmail, model, upstreamWaitHours);
+        logStore.log('warn', 'chat', `[Chat] Mid-payload RateLimited on ${resolvedEmail} (${model}) — throttled, finishing stream`);
+      }
       try {
         require('fs').writeFileSync('/tmp/qwen-error-buffer.json', buffer.slice(0, 10000));
       } catch {}

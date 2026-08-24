@@ -92,6 +92,10 @@ export interface StreamProcessingState {
    *  rate limit, etc.). The post-stream handler flushes partial content first,
    *  then surfaces this to the client instead of dropping what was received. */
   upstreamError?: string;
+  /** Upstream error code (e.g. RateLimited) captured with upstreamError */
+  upstreamCode?: string;
+  /** Hours Qwen asked to wait — carried by RateLimited payloads (data.num) */
+  upstreamWaitHours?: number;
   /** Depth tracking for nested tool call XML blocks. >0 means suppress content emission. */
   toolCallDepth: number;
   /**
@@ -179,6 +183,22 @@ export async function processStreamData(data: any, state: StreamProcessingState,
     // content already received, THEN surface the error to the client —
     // instead of dropping everything and showing a bare server error.
     state.upstreamError = `Qwen upstream error: ${errMsg}`;
+    return 'break_stream';
+  }
+  // Qwen envelope errors arrive as {"success":false,data:{code,details,num}}
+  // — notably RateLimited walls delivered inside an HTTP 200 SSE stream.
+  if (data?.success === false) {
+    const code = data.data?.code || data.code || 'UpstreamError';
+    const details = data.data?.details || data.message || 'Qwen returned an error';
+    const wait = data.data?.num !== undefined ? ` Wait about ${data.data.num} hour(s) before trying again.` : '';
+    state.upstreamError = `Qwen upstream error: ${code}: ${details}.${wait}`;
+    state.upstreamCode = code;
+    state.upstreamWaitHours = data.data?.num;
+    logStore.addError(logId, state.upstreamError);
+    logStore.updateEntry(logId, (entry) => {
+      entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
+      entry.finalResponse.finishReason = 'error';
+    });
     return 'break_stream';
   }
   const deltaStatus = data.choices?.[0]?.delta?.status;

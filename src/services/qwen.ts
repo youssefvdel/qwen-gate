@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { CircuitBreaker, CircuitOpenError, withRetry } from '../utils/retry.ts';
 import { logCrash, logSessionClose } from '../utils/wreqCrashLogger.ts';
-import { decrementInFlight, getTokenWithAccount, pickAccount, throttleAccount } from './auth.ts';
+import { decrementInFlight, getAccountByEmail, getTokenWithAccount, pickAccount, throttleAccount } from './auth.ts';
 import { browserlessFetch } from './browserlessFetch.ts';
 import { config } from './configService.ts';
 import { logStore } from './logStore.ts';
@@ -50,6 +50,24 @@ export class QwenUpstreamError extends Error {
     this.upstreamCode = upstreamCode;
     this.upstreamStatus = upstreamStatus;
   }
+}
+
+/**
+ * Native RateLimited wall enforcement — the single place that records a wall
+ * hit and applies the standard cooldown. Used by every detection path:
+ * HTTP-level error responses AND mid-payload walls (HTTP 200 body/SSE).
+ * No-op for unknown accounts (e.g. anonymous test sessions).
+ */
+export function reportRateLimitWall(
+  accountEmail: string | null | undefined,
+  model: string | null | undefined,
+  waitHours: number | null | undefined,
+): void {
+  if (!accountEmail || !getAccountByEmail(accountEmail)) return;
+  const hours = Math.max(1, Math.floor(waitHours || 1));
+  recordRateLimited(accountEmail, model || 'unknown', hours);
+  // Full Qwen-reported duration (e.g. 4h/7h) — same policy as an HTTP-level wall
+  throttleAccount(accountEmail, hours * 3600_000);
 }
 
 class UpstreamStatusError extends Error {
@@ -286,14 +304,9 @@ export async function createQwenStream(
           const code = errorJson.data?.code || errorJson.code || 'UpstreamError';
           const details = errorJson.data?.details || errorJson.message || 'Qwen returned an error';
           const wait = errorJson.data?.num !== undefined ? ` Wait about ${errorJson.data.num} hour(s) before trying again.` : '';
-          if (code === 'RateLimited' && currentAccountEmail) {
-            const waitHours = errorJson.data?.num || 1;
-            const throttleMs = waitHours * 3600_000;
+          if (code === 'RateLimited') {
             // Record the wall hit — this is the only quota signal Qwen exposes for flagship models
-            recordRateLimited(currentAccountEmail, model, waitHours);
-            // Use the full duration from Qwen (e.g. 7 hours) — do NOT cap at 2h.
-            // Capping caused accounts to become "available" while Qwen still rejected them.
-            throttleAccount(currentAccountEmail, throttleMs);
+            reportRateLimitWall(currentAccountEmail, model, errorJson.data?.num);
             const nextAccount = await pickAccount(currentAccountEmail);
             if (nextAccount) {
               currentAccountEmail = nextAccount.email;
